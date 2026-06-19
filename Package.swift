@@ -169,7 +169,10 @@ let linkTesting = envBoolValue("LINK_TESTING")
 let symbolLocatorCondition = envBoolValue("SYMBOL_LOCATOR", default: buildForDarwinPlatform)
 let openCombineCondition = envBoolValue("OPENCOMBINE", default: !buildForDarwinPlatform)
 let swiftLogCondition = envBoolValue("SWIFT_LOG", default: !buildForDarwinPlatform)
-let swiftCryptoCondition = envBoolValue("SWIFT_CRYPTO", default: !buildForDarwinPlatform)
+// swift-crypto is needed ONLY for StrongHash's Insecure.SHA1, and it statically links all of
+// BoringSSL (huge — blew past the on-device AOT footprint cliff). StrongHash now has a pure-Swift
+// SHA-1 fallback (the `#else` branch), so default OFF off-Darwin too (Darwin uses CommonCrypto).
+let swiftCryptoCondition = envBoolValue("SWIFT_CRYPTO", default: false)
 let renderGTKCondition = envBoolValue("RENDER_GTK", default: !buildForDarwinPlatform)
 
 let swiftUIRenderCondition = envBoolValue("SWIFTUI_RENDERER", default: false)
