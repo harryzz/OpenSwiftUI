@@ -303,19 +303,52 @@ public struct ViewTransform: Equatable, CustomStringConvertible {
         }
     }
     
+    // Direction of the conversion through the root→view transform stack: forward (apply items
+    // as stored) for *toSpace, inverse (reverse order + invert each op) for space→root/local.
+    private func conversionIsInverted(_ conversion: ViewTransform.Conversion) -> Bool {
+        switch conversion {
+        case .rootToSpace, .localToSpace, .spaceToSpace: return false
+        case .spaceToRoot, .spaceToLocal: return true
+        }
+    }
+
     package func convert(_ conversion: ViewTransform.Conversion, _ body: (ViewTransform.Item) -> Void) {
         guard !isEmpty else { return }
-        _openSwiftUIUnimplementedFailure()
+        forEach(inverted: conversionIsInverted(conversion)) { item, _ in body(item) }
     }
-    
+
     package func convert(_ conversion: ViewTransform.Conversion, points: inout [CGPoint]) {
         guard !isEmpty else { return }
-        _openSwiftUIUnimplementedFailure()
+        for i in points.indices {
+            points[i] = convert(conversion, point: points[i])
+        }
     }
-    
+
     package func convert(_ conversion: ViewTransform.Conversion, point: CGPoint) -> CGPoint {
         guard !isEmpty else { return point }
-        _openSwiftUIUnimplementedFailure()
+        let inverted = conversionIsInverted(conversion)
+        var p = point
+        forEach(inverted: inverted) { item, _ in
+            switch item {
+            case let .translation(offset):
+                if inverted {
+                    p.x -= offset.width; p.y -= offset.height
+                } else {
+                    p.x += offset.width; p.y += offset.height
+                }
+            case let .affineTransform(matrix, inverse):
+                #if canImport(CoreGraphics)
+                p = p.applying((inverse != inverted) ? matrix.inverted() : matrix)
+                #else
+                // Off-Apple CGAffineTransform.inverted() is unavailable; the wandr layout
+                // transform stack is translations only, so non-identity affines are rare.
+                if !(inverse != inverted) { p = p.applying(matrix) } else { _openSwiftUIPlatformUnimplementedWarning() }
+                #endif
+            default:
+                break // coordinateSpace / sizedSpace / projection / scroll: no point change
+            }
+        }
+        return p
     }
     
     package var containingScrollGeometry: ScrollGeometry? {
