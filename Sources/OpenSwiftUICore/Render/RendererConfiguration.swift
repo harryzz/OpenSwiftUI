@@ -184,6 +184,15 @@ public protocol WandrDrawSink: AnyObject {
         red: Float, green: Float, blue: Float, opacity: Float
     )
 
+    /// Draw `text` within the given frame (from `.content(.text)`). The HOST does shaping +
+    /// paragraph layout (wasi:canvas paragraph / Skia); the guest passes the plain string,
+    /// the laid-out frame, the nominal font size, and the sRGB color.
+    func drawText(
+        _ text: String,
+        x: Double, y: Double, width: Double, height: Double,
+        fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float
+    )
+
     /// Called once at the end of a render pass.
     func endFrame()
 }

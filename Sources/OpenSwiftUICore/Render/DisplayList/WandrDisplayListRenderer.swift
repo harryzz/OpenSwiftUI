@@ -100,8 +100,21 @@ private struct WandrSinkVisitor {
                 ),
                 opacity: opacity
             )
+        case let .text(textView, _):
+            // The laid-out `frame` positions the text; the host shapes + draws the string.
+            // Color is the environment-resolved foreground (white fallback when unset);
+            // opacity carries the accumulated effect opacity.
+            let c = textView.wasmColor
+            sink.drawText(
+                textView.wasmPlainString,
+                x: Double(frame.minX), y: Double(frame.minY),
+                width: Double(frame.width), height: Double(frame.height),
+                fontSize: Double(textView.wasmFontSize),
+                red: c?.red ?? 1.0, green: c?.green ?? 1.0, blue: c?.blue ?? 1.0,
+                opacity: (c?.opacity ?? 1.0) * opacity
+            )
         default:
-            // TODO: text, image, shadow, backdrop, view, platform* — grow WandrDrawSink.
+            // TODO: image, shadow, backdrop, view, platform* — grow WandrDrawSink.
             break
         }
     }

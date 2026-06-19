@@ -145,16 +145,25 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
 
     package var needsDrawingGroup: Bool
 
+    // WASI: environment-resolved font size + foreground color (the off-Apple text resolution
+    // is stubbed, so the build site resolves these and threads them to the leaf content).
+    package var wasmFontSize: CGFloat = 17
+    package var wasmColor: Color.Resolved? = nil
+
     package init(
         text: ResolvedStyledText,
         unresolvedText: Text,
         renderer: TextRendererBoxBase? = nil,
-        needsDrawingGroup: Bool = false
+        needsDrawingGroup: Bool = false,
+        wasmFontSize: CGFloat = 17,
+        wasmColor: Color.Resolved? = nil
     ) {
         self.text = text
         self.unresolvedText = unresolvedText
         self.renderer = renderer
         self.needsDrawingGroup = needsDrawingGroup
+        self.wasmFontSize = wasmFontSize
+        self.wasmColor = wasmColor
     }
 
     package var body: some View {
@@ -162,7 +171,10 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
             content: StyledTextContentView(
                 text: text,
                 renderer: renderer,
-                needsDrawingGroup: needsDrawingGroup
+                needsDrawingGroup: needsDrawingGroup,
+                wasmPlainString: unresolvedText.wasmPlainStringFallback,
+                wasmFontSize: wasmFontSize,
+                wasmColor: wasmColor
             ),
             text: unresolvedText,
             resolved: text
@@ -172,19 +184,76 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
 
 // MARK: - StyledTextContentView [WIP]
 
+extension Text {
+    /// Plain-string fallback that does NOT need an `EnvironmentValues` (unlike `_resolveText`),
+    /// used on wasm to carry the verbatim string to the DisplayList text content. Best-effort
+    /// for non-verbatim storages.
+    package var wasmPlainStringFallback: String {
+        // Use _localizationInfo (safe: verbatim string OR the literal key) — NOT
+        // String(describing: storage), whose AnyTextStorage.debugDescription faults off-Apple.
+        switch _localizationInfo {
+        case .none: return ""
+        case let .verbatim(string): return string
+        case let .localized(key, _, _, _): return key
+        }
+    }
+}
+
+#if os(WASI)
+// WASI: route StyledTextContentView through the RendererLeafView / LeafViewLayout leaf path
+// (see its `_makeView`) — emit `.content(.text)` for the host (wasi:canvas paragraph / Skia)
+// to shape + draw, with a coarse size estimate for layout. Real metrics would come from a host
+// paragraph measure (TODO); the estimate is enough to place the glyphs.
+extension StyledTextContentView: RendererLeafView, LeafViewLayout {
+    private var wasmEstimatedSize: CGSize {
+        CGSize(
+            width: CGFloat(wasmPlainString.count) * wasmFontSize * 0.6,
+            height: wasmFontSize * 1.35
+        )
+    }
+    package func content() -> DisplayList.Content.Value {
+        .text(self, wasmEstimatedSize)
+    }
+    package func sizeThatFits(in proposedSize: _ProposedSize) -> CGSize {
+        wasmEstimatedSize
+    }
+    // Disambiguate ContentResponder.contains (ShapeStyledLeafView vs RendererLeafView both
+    // vend a default); text isn't interactive here, so report no hit.
+    package func contains(points: [PlatformPoint], size: CGSize) -> BitVector64 {
+        BitVector64()
+    }
+}
+#endif
+
 package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafView {
     package var text: ResolvedStyledText
     package var renderer: TextRendererBoxBase?
     package var needsDrawingGroup: Bool
+    // WASI: the off-Apple text resolution (ResolvedStyledText.storage NSAttributedString) is
+    // stubbed → nil, so carry the plain string + nominal font size from the unresolved Text so
+    // the wasm RendererLeafView path can emit a `.content(.text)` the host (wasi:canvas
+    // paragraph / Skia) shapes + draws. (Default empty so non-text construction is unaffected.)
+    package var wasmPlainString: String = ""
+    // Resolved from the environment at the build site (TextChildQuery): the font's point size
+    // and the foreground color. 17 (SwiftUI body) is the fallback when no .font is set; nil
+    // color means "use the sink default".
+    package var wasmFontSize: CGFloat = 17
+    package var wasmColor: Color.Resolved? = nil
 
     package init(
         text: ResolvedStyledText,
         renderer: TextRendererBoxBase? = nil,
-        needsDrawingGroup: Bool = false
+        needsDrawingGroup: Bool = false,
+        wasmPlainString: String = "",
+        wasmFontSize: CGFloat = 17,
+        wasmColor: Color.Resolved? = nil
     ) {
         self.text = text
         self.renderer = renderer
         self.needsDrawingGroup = needsDrawingGroup
+        self.wasmPlainString = wasmPlainString
+        self.wasmFontSize = wasmFontSize
+        self.wasmColor = wasmColor
     }
 
     package static var animatesSize: Bool {
@@ -204,6 +273,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         view: _GraphValue<Self>,
         inputs: _ViewInputs
     ) -> _ViewOutputs {
+        #if os(WASI)
+        // WASI: the ShapeStyle/glyph render path (ShapeStyleRendering) is stubbed off-Apple,
+        // so emit a `.content(.text)` leaf (RendererLeafView) instead — the host (wasi:canvas
+        // paragraph / Skia) does the shaping + drawing. Layout via the LeafViewLayout estimate.
+        var outputs = makeLeafView(view: view, inputs: inputs)
+        makeLeafLayout(&outputs, view: view, inputs: inputs)
+        return outputs
+        #else
         var newInputs = inputs
         if inputs.preferences.requiresViewResponders {
             newInputs.preferences.requiresViewResponders = false
@@ -253,6 +330,7 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         }
         // TODO: Text.Layout.Key
         return outputs
+        #endif
     }
 
     package typealias Body = Never
@@ -1026,11 +1104,21 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
     }
 
     var value: some View {
+        // WASI: resolve the font's point size + foreground color from the environment here
+        // (the off-Apple ResolvedStyledText.storage is nil), and thread them to the leaf
+        // content so the host draws at the right size/color. System fonts resolve without
+        // CoreText (see Font.scaleFactor); fall back to SwiftUI's body size / sink default.
+        let env = environment
+        let resolvedSize = env.font?.resolveTraits(in: env).pointSize ?? 0
+        let wasmFontSize: CGFloat = resolvedSize > 0 ? resolvedSize : 17
+        let wasmColor: Color.Resolved? = env.foregroundColor?.resolve(in: env)
         let accessibilityView = AccessibilityStyledTextContentView<P>(
             text: resolvedText,
             unresolvedText: unresolvedText,
             renderer: renderer,
-            needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false
+            needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false,
+            wasmFontSize: wasmFontSize,
+            wasmColor: wasmColor
         )
         return accessibilityView.body
     }

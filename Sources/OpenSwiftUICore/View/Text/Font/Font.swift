@@ -303,7 +303,10 @@ extension Font {
             return ratio
         }
         #else
-        _openSwiftUIPlatformUnimplementedFailure()
+        // CoreText (the Dynamic Type ratio source) is unavailable off-Apple. At the default
+        // content size the ratio is identity, which yields the correct base point sizes
+        // (e.g. .body → 17, .largeTitle → 34) so system fonts resolve without CoreText.
+        return 1.0
         #endif
     }
 }
