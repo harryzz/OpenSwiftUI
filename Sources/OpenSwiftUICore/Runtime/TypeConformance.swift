@@ -16,9 +16,19 @@ package protocol ProtocolDescriptor {
 
 extension ProtocolDescriptor {
     package static func conformance(of type: any Any.Type) -> TypeConformance<Self>? {
+        #if os(WASI)
+        // WASI: route through the C-ABI shim (swift_conformsToProtocol is C_CC; the
+        // @_silgen_name call mislowers on wasm -> signature_mismatch).
+        guard let conformance = _OpenSwiftUI_conformsToProtocol(
+            unsafeBitCast(type, to: UnsafeRawPointer.self), descriptor
+        ) else {
+            return nil
+        }
+        #else
         guard let conformance = swiftConformsToProtocol(type, descriptor) else {
             return nil
         }
+        #endif
         return TypeConformance(storage: (type, conformance))
     }
 }

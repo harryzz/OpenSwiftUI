@@ -17,21 +17,35 @@ package func autoreleasepool<Result>(invoking body: () throws -> Result) rethrow
     try body()
 }
 
+#if !os(WASI)
 extension CFRunLoopMode {
     package static let defaultMode: CFRunLoopMode! = kCFRunLoopDefaultMode
     package static let commonModes: CFRunLoopMode! = kCFRunLoopCommonModes
 }
 #endif
+#endif
 
 package func onNextMainRunLoop(do body: @escaping () -> Void) {
+    #if os(WASI)
+    // RunLoop is unavailable on WASI; defer to the host frame loop instead.
+    _wasmEnqueueMainRunLoop(body)
+    #else
     RunLoop.main.perform(inModes: [.common], block: body)
+    #endif
 }
 
+#if !os(WASI)
 private var observer: CFRunLoopObserver?
+#endif
 private var observerActions: [() -> Void] = []
 
 extension RunLoop {
     package static func addObserver(_ action: @escaping () -> Void) {
+        #if os(WASI)
+        // No CFRunLoop on wasm: just queue the action. The host frame loop drains
+        // it via flushObservers() (wired through _wasmDrainMainRunLoop in phase 3).
+        observerActions.append(action)
+        #else
         let currentRunloop = CFRunLoopGetCurrent()
         if observer == nil {
             observer = CFRunLoopObserverCreate(
@@ -55,6 +69,7 @@ extension RunLoop {
             }
         }
         observerActions.append(action)
+        #endif
     }
 
     package static func flushObservers() {
@@ -69,6 +84,12 @@ extension RunLoop {
         }
     }
 
+    #if os(WASI)
+    // No CFRunLoop to run on wasm; the host frame loop owns time. No-op.
+    package static func runAllowingEarlyExit(until deadline: Date, stopCondition: () -> Bool) {}
+
+    package static func runAllowingEarlyExit(until deadline: Date) {}
+    #else
     package static func runAllowingEarlyExit(until deadline: Date, stopCondition: () -> Bool) {
         repeat {
             let diff = deadline.timeIntervalSinceReferenceDate - CFAbsoluteTimeGetCurrent()
@@ -87,4 +108,5 @@ extension RunLoop {
     package static func runAllowingEarlyExit(until deadline: Date) {
         runAllowingEarlyExit(until: deadline) { false }
     }
+    #endif
 }

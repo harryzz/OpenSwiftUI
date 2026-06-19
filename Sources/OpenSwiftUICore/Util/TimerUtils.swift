@@ -30,6 +30,12 @@ package func withDelay(_ timeInterval: TimeInterval, do body: @escaping () -> Vo
     let timer = Timer(timeInterval: timeInterval, repeats: false) { _ in
         body()
     }
+    #if os(WASI)
+    // RunLoop is unavailable on WASI; timers are wired to the host frame clock
+    // in a later phase. Returning the (un-scheduled) timer keeps `withDelay` total.
+    _ = timer
+    #else
     RunLoop.main.add(timer, forMode: .common)
+    #endif
     return timer
 }

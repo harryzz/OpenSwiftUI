@@ -429,7 +429,11 @@ extension Target {
 
     func addOpenCombineSettings() {
         dependencies.append(.product(name: "OpenCombine", package: "OpenCombine"))
-        dependencies.append(.product(name: "OpenCombineFoundation", package: "OpenCombine"))
+        // OpenCombineFoundation bridges Foundation (URLSession/OperationQueue/RunLoop +
+        // os_unfair_lock) — not available on wasm, and OpenSwiftUICore doesn't import it.
+        if buildForDarwinPlatform {
+            dependencies.append(.product(name: "OpenCombineFoundation", package: "OpenCombine"))
+        }
         var swiftSettings = swiftSettings ?? []
         swiftSettings.append(.define("OPENSWIFTUI_OPENCOMBINE"))
         self.swiftSettings = swiftSettings

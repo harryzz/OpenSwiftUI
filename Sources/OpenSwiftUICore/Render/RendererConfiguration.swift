@@ -28,6 +28,12 @@ public struct _RendererConfiguration {
         /// to standard output.
         @_spi(StdoutRenderer)
         indirect case stdout(_ options: _RendererConfiguration.StdoutOptions = .init())
+
+        /// A renderer that walks the resolved display list and pushes primitive
+        /// draw commands into a `WandrDrawSink` (the wandr Option-B backend: the
+        /// guest implements the sink over a wasi:canvas CGContext). No default —
+        /// the sink is required.
+        indirect case wandr(_ options: _RendererConfiguration.WandrOptions)
         #endif
         /* OpenSwiftUI Addition End */
     }
@@ -59,6 +65,11 @@ public struct _RendererConfiguration {
     public static func stdout(_ options: _RendererConfiguration.StdoutOptions = .init()) -> _RendererConfiguration {
         _RendererConfiguration(renderer: .stdout(options))
     }
+
+    /// Returns a configuration that renders the display list into a `WandrDrawSink`.
+    public static func wandr(_ options: _RendererConfiguration.WandrOptions) -> _RendererConfiguration {
+        _RendererConfiguration(renderer: .wandr(options))
+    }
     #endif
 
     /* OpenSwiftUI Addition End */
@@ -77,6 +88,22 @@ public struct _RendererConfiguration {
         private static let defaultSurfaceSize = CGSize(width: 640.0, height: 480.0)
 
         public init() {}
+    }
+
+    // MARK: - _RendererConfiguration.WandrOptions
+
+    /// Options for the `wandr` renderer.
+    public struct WandrOptions {
+        /// The surface size the display list is laid out / rendered into.
+        public var surface: CGSize = CGSize(width: 640.0, height: 480.0)
+
+        /// The sink that receives resolved primitive draw commands.
+        public var sink: WandrDrawSink
+
+        public init(surface: CGSize = CGSize(width: 640.0, height: 480.0), sink: WandrDrawSink) {
+            self.surface = surface
+            self.sink = sink
+        }
     }
 
     /* OpenSwiftUI Addition End */
@@ -135,6 +162,31 @@ extension _RendererConfiguration.RasterizationOptions: Sendable {}
 @_spi(StdoutRenderer)
 @available(*, unavailable)
 extension _RendererConfiguration.StdoutOptions: Sendable {}
+
+@available(*, unavailable)
+extension _RendererConfiguration.WandrOptions: Sendable {}
+
+// MARK: - WandrDrawSink
+
+/// The drawing sink for the `wandr` renderer (Option B). OpenSwiftUI walks the
+/// resolved `DisplayList` and pushes primitive, fully-resolved draw commands here;
+/// the wandr guest implements this over a wasi:canvas `CGContext`. Coordinates are
+/// in surface space (top-left origin); colors are sRGB 0...1 with premultiplied
+/// opacity already folded into `opacity`. Geometry/colors are plain scalars so the
+/// sink stays independent of any CoreGraphics type.
+public protocol WandrDrawSink: AnyObject {
+    /// Called once at the start of a render pass with the surface size + display-list version.
+    func beginFrame(width: Double, height: Double, version: UInt32)
+
+    /// Fill an axis-aligned rectangle (resolved from `.content(.color)` / `.shape`-with-solid-paint).
+    func fillRect(
+        x: Double, y: Double, width: Double, height: Double,
+        red: Float, green: Float, blue: Float, opacity: Float
+    )
+
+    /// Called once at the end of a render pass.
+    func endFrame()
+}
 /* OpenSwiftUI Addition End */
 
 // MARK: - RasterizationOptions + _RendererConfiguration.RasterizationOptions

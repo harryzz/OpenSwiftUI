@@ -223,6 +223,11 @@ extension _ViewTest {
 
     public func loop() {
         render()
+        #if os(WASI)
+        // No RunLoop on wasm; the host frame loop drives rendering. Drain any
+        // deferred main-run-loop work instead of pumping a (nonexistent) loop.
+        _ = _wasmDrainMainRunLoop()
+        #else
         let defaultMode = RunLoop.Mode.default
         let commonMode = RunLoop.Mode.common
         var count: UInt = 0
@@ -234,10 +239,14 @@ extension _ViewTest {
             }
             count += 1
         }
+        #endif
     }
 
     public func turnRunloop(times: Int = 1) {
         Swift.assert(times > 0)
+        #if os(WASI)
+        for _ in 0..<times { _ = _wasmDrainMainRunLoop() }
+        #else
         let defaultMode = RunLoop.Mode.default
         let commonMode = RunLoop.Mode.common
         let interval = 0.001
@@ -250,22 +259,25 @@ extension _ViewTest {
                 Thread.sleep(forTimeInterval: interval)
             }
         }
+        #endif
     }
 
     private func turnRunLoopIfNeeded(host: any TestHost, seconds: Double, options: TestRenderOptions) {
         guard CoreTesting.neeedsRunLoopTurn else {
             return
         }
-        let defaultMode = RunLoop.Mode.default
-        let commonMode = RunLoop.Mode.common
         let interval = 0.001
         var times = 17
         while CoreTesting.needsRender || CoreTesting.neeedsRunLoopTurn {
+            #if os(WASI)
+            _ = _wasmDrainMainRunLoop()
+            #else
             // let modes = [defaultMode, commonMode]
             let date = Date(timeIntervalSinceNow: interval)
-            if !RunLoop.current.run(mode: defaultMode, before: date) {
+            if !RunLoop.current.run(mode: .default, before: date) {
                 Thread.sleep(forTimeInterval: interval)
             }
+            #endif
             render(host: host, seconds: seconds, options: options)
             times &-= 1
             if times <= 1 {

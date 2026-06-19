@@ -5,11 +5,10 @@
 //  Audited for 6.0.87
 //  Status: Complete
 
-#if canImport(Darwin)
+// Was `import` (internal) on non-Darwin, but `setIndirectDependency` exposes
+// AnyAttribute in a `package` signature — needs `package import` everywhere
+// (only surfaces with OPENSWIFTUI_ANY_ATTRIBUTE_FIX off, i.e. real OAG types).
 package import OpenAttributeGraphShims
-#else
-import OpenAttributeGraphShims
-#endif
 
 extension _ViewInputs {
     package func makeIndirectOutputs() -> _ViewOutputs {

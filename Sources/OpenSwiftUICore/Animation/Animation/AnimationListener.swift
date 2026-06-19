@@ -6,7 +6,9 @@
 //  Status: Complete
 //  ID: 390609F81ACEBEAF00AD8179BD31E870 (SwiftUICore)
 
-import Dispatch
+#if canImport(Dispatch)
+import Dispatch   // wasm: no Dispatch module — the in-module WasmDispatchShim provides the types
+#endif
 
 // MARK: - AnimationListener
 

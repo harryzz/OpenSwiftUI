@@ -358,8 +358,15 @@ public struct LocalizedStringKey: Equatable, ExpressibleByStringInterpolation {
             )
         }
         #else
+        #if os(WASI)
+        // WASI: Foundation's Bundle.main crashes on wasm and there are no localization
+        // tables; localize only if an explicit bundle was given, else use the key (the
+        // documented no-table fallback). Avoids touching Bundle.main.
+        let localizedString = bundle.map { _LocalizeString($0, key, table, environment.locale) } ?? key
+        #else
         let bundle = bundle ?? .main
         let localizedString = _LocalizeString(bundle, key, table, environment.locale)
+        #endif
         guard hasFormatting else {
             result.append(localizedString, in: environment, with: options)
             return
@@ -470,8 +477,12 @@ public struct LocalizedStringKey: Equatable, ExpressibleByStringInterpolation {
         table: String?,
         bundle: Bundle?
     ) -> Bool {
+        #if os(WASI)
+        let localizedString = bundle.map { _LocalizeString($0, key, table, environment.locale) } ?? key
+        #else
         let bundle = bundle ?? .main
         let localizedString = _LocalizeString(bundle, key, table, environment.locale)
+        #endif
         guard hasFormatting else {
             return localizedString.isEmpty
         }

@@ -67,3 +67,15 @@ const void *$s15OpenSwiftUICore12StyleContextMp;
 const void *_OpenSwiftUI_styleContextProtocolDescriptor(void) {
     return &$s15OpenSwiftUICore12StyleContextMp;
 }
+
+#if defined(__wasi__)
+// swift_conformsToProtocol is declared C_CC in the Swift runtime
+// (RuntimeFunctions.def: `Swift, swift_conformsToProtocol, C_CC, ...`). Forward to it
+// with the C ABI so Swift's call lowers to a matching wasm signature (the direct
+// @_silgen_name call mislowers -> signature_mismatch on wasm).
+extern const void *swift_conformsToProtocol(const void *type, const void *protocolDescriptor);
+
+const void *_OpenSwiftUI_conformsToProtocol(const void *type, const void *protocolDescriptor) {
+    return swift_conformsToProtocol(type, protocolDescriptor);
+}
+#endif

@@ -5,7 +5,9 @@
 //  Audited for 6.5.4
 //  Status: Complete
 
+#if !os(WASI)
 import class Foundation.Thread
+#endif
 import OpenAttributeGraphShims
 #if OPENSWIFTUI_OPENCOMBINE
 import OpenCombine

@@ -6,7 +6,9 @@
 //  Status: Complete
 //  ID: BDD24532CFCFEBA7264ABA5DE20A4002 (SwiftUICore)
 
+#if !os(WASI)
 import class Foundation.Thread
+#endif
 import OpenAttributeGraphShims
 #if OPENSWIFTUI_OPENCOMBINE
 public import OpenCombine

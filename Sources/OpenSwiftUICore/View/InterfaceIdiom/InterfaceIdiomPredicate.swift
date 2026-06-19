@@ -33,7 +33,9 @@ extension _GraphInputs {
         #elseif os(iOS) || os(visionOS)
         AnyInterfaceIdiom(.phone)
         #else
-        _openSwiftUIUnimplementedFailure()
+        // WASI/wandr (phone-class device): default to the phone idiom rather than the
+        // upstream unimplemented stub, so Text (and anything reading interfaceIdiom) works.
+        AnyInterfaceIdiom(.phone)
         #endif
     }
 }

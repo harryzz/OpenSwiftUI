@@ -43,6 +43,13 @@ func runStdoutApp(
             options: options
         )
         host.renderOnce()
+        #if os(WASI)
+        // WASI: exit BEFORE the closure's locals (host/graph) deinit. Teardown runs
+        // GraphHost.invalidate -> Subgraph.forEach, an arg-closure that still hits the
+        // swiftcall mislowering; for a one-shot stdout render we don't need clean
+        // teardown. exit(0) also flushes stdout. (Remove once forEach has a *C variant.)
+        exit(0)
+        #endif
     }
     exit(0)
 }
