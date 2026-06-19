@@ -145,8 +145,10 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
 
     package var needsDrawingGroup: Bool
 
-    // WASI: environment-resolved font size + foreground color (the off-Apple text resolution
-    // is stubbed, so the build site resolves these and threads them to the leaf content).
+    // WASI: environment-resolved plain string (formats interpolated keys like "\(n)"→"2"),
+    // font size + foreground color (the off-Apple text resolution is stubbed, so the build
+    // site resolves these and threads them to the leaf content).
+    package var wasmPlainString: String = ""
     package var wasmFontSize: CGFloat = 17
     package var wasmColor: Color.Resolved? = nil
 
@@ -155,6 +157,7 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
         unresolvedText: Text,
         renderer: TextRendererBoxBase? = nil,
         needsDrawingGroup: Bool = false,
+        wasmPlainString: String = "",
         wasmFontSize: CGFloat = 17,
         wasmColor: Color.Resolved? = nil
     ) {
@@ -162,6 +165,7 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
         self.unresolvedText = unresolvedText
         self.renderer = renderer
         self.needsDrawingGroup = needsDrawingGroup
+        self.wasmPlainString = wasmPlainString
         self.wasmFontSize = wasmFontSize
         self.wasmColor = wasmColor
     }
@@ -172,7 +176,7 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
                 text: text,
                 renderer: renderer,
                 needsDrawingGroup: needsDrawingGroup,
-                wasmPlainString: unresolvedText.wasmPlainStringFallback,
+                wasmPlainString: wasmPlainString,
                 wasmFontSize: wasmFontSize,
                 wasmColor: wasmColor
             ),
@@ -1109,6 +1113,9 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
         // content so the host draws at the right size/color. System fonts resolve without
         // CoreText (see Font.scaleFactor); fall back to SwiftUI's body size / sink default.
         let env = environment
+        // Resolve the plain string env-aware so interpolated keys format ("\(n)"→"2");
+        // verbatim text returns as-is.
+        let wasmPlainString = unresolvedText._resolveText(in: env)
         let resolvedSize = env.font?.resolveTraits(in: env).pointSize ?? 0
         let wasmFontSize: CGFloat = resolvedSize > 0 ? resolvedSize : 17
         let wasmColor: Color.Resolved? = env.foregroundColor?.resolve(in: env)
@@ -1117,6 +1124,7 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
             unresolvedText: unresolvedText,
             renderer: renderer,
             needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false,
+            wasmPlainString: wasmPlainString,
             wasmFontSize: wasmFontSize,
             wasmColor: wasmColor
         )
