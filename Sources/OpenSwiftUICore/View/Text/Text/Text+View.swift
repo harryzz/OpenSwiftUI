@@ -203,11 +203,10 @@ extension Text {
     }
 }
 
-#if os(WASI)
-// WASI: route StyledTextContentView through the RendererLeafView / LeafViewLayout leaf path
-// (see its `_makeView`) — emit `.content(.text)` for the host (wasi:canvas paragraph / Skia)
-// to shape + draw, with a coarse size estimate for layout. Real metrics would come from a host
-// paragraph measure (TODO); the estimate is enough to place the glyphs.
+// Host-shaped-text path: route StyledTextContentView through RendererLeafView / LeafViewLayout
+// (see its `_makeView`, gated on the usesHostShapedText capability) — emit `.content(.text)` for
+// the renderer (e.g. wasi:canvas paragraph / Skia) to shape + draw, with a coarse size estimate
+// for layout. The conformance is harmless on renderers that don't use it (Apple's glyph path).
 extension StyledTextContentView: RendererLeafView, LeafViewLayout {
     private var wasmEstimatedSize: CGSize {
         CGSize(
@@ -227,7 +226,6 @@ extension StyledTextContentView: RendererLeafView, LeafViewLayout {
         BitVector64()
     }
 }
-#endif
 
 package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafView {
     package var text: ResolvedStyledText
@@ -277,14 +275,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         view: _GraphValue<Self>,
         inputs: _ViewInputs
     ) -> _ViewOutputs {
-        #if os(WASI)
-        // WASI: the ShapeStyle/glyph render path (ShapeStyleRendering) is stubbed off-Apple,
-        // so emit a `.content(.text)` leaf (RendererLeafView) instead — the host (wasi:canvas
-        // paragraph / Skia) does the shaping + drawing. Layout via the LeafViewLayout estimate.
-        var outputs = makeLeafView(view: view, inputs: inputs)
-        makeLeafLayout(&outputs, view: view, inputs: inputs)
-        return outputs
-        #else
+        if _RenderingCapabilities.current.usesHostShapedText {
+            // Renderer shapes text itself (e.g. wasi:canvas paragraph / Skia): emit a
+            // `.content(.text)` leaf (RendererLeafView) rather than the in-framework ShapeStyle
+            // glyph path. Layout via the LeafViewLayout estimate.
+            var outputs = makeLeafView(view: view, inputs: inputs)
+            makeLeafLayout(&outputs, view: view, inputs: inputs)
+            return outputs
+        }
         var newInputs = inputs
         if inputs.preferences.requiresViewResponders {
             newInputs.preferences.requiresViewResponders = false
@@ -334,7 +332,6 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         }
         // TODO: Text.Layout.Key
         return outputs
-        #endif
     }
 
     package typealias Body = Never

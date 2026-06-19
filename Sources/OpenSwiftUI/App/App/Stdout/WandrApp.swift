@@ -38,6 +38,14 @@ public func renderWandrAppOnce(
     _ app: some App,
     options: _RendererConfiguration.WandrOptions
 ) {
+    // The wandr renderer declares its capabilities here (the platform/renderer layer — NOT
+    // core view logic). The host shapes text itself (wasi:canvas paragraph / Skia) and view
+    // transitions aren't implemented yet, so core falls back accordingly. Apple builds never
+    // call this and keep the defaults (transitions on, in-framework glyph text).
+    _RenderingCapabilities.current = _RenderingCapabilities(
+        supportsViewTransitions: false,
+        usesHostShapedText: true
+    )
     Update.dispatchImmediately(reason: nil) {
         let graph = AppGraph(app: app)
         graph.instantiate()

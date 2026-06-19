@@ -240,7 +240,10 @@ struct DynamicLayoutViewAdaptor: DynamicContainerAdaptor {
                 elementInputs.requestsLayoutComputer = true
             }
             let outputs: _ViewOutputs
-            if let transition {
+            // Transitions go through ViewListContentTransition. A renderer that doesn't support
+            // them (capability declared by the platform layer) renders the element directly —
+            // otherwise the element body is never made and the view doesn't render at all.
+            if let transition, _RenderingCapabilities.current.supportsViewTransitions {
                 var makeTransition = MakeTransition(
                     containerInfo: containerInfo,
                     uniqueId: uniqueId,

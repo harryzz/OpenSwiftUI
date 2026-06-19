@@ -226,3 +226,29 @@ extension RasterizationOptions {
         )
     }
 }
+
+// MARK: - _RenderingCapabilities
+
+/// Platform/renderer capabilities queried by core view logic INSTEAD of compile-time
+/// `#if os(WASI)`/`#if os(Linux)`. Core stays platform-agnostic and compiles unmodified on every
+/// platform; the WASI-vs-Linux-vs-Apple decision lives in the platform/renderer layer, which
+/// overrides these (e.g. the wandr wasi:canvas renderer in renderWandrAppOnce). Defaults are the
+/// Apple/CoreGraphics behavior, so unconfigured (Apple) builds are unaffected.
+package struct _RenderingCapabilities: Sendable {
+    /// Whether view transitions (insert/remove animations via `ViewListContentTransition`) are
+    /// available. When `false`, dynamic-container items carrying a `.transition` render directly.
+    package var supportsViewTransitions: Bool
+
+    /// Whether `Text` renders as a host-shaped `.content(.text)` display-list leaf (the renderer
+    /// shapes the glyphs) rather than the in-framework ShapeStyle glyph-layer path.
+    package var usesHostShapedText: Bool
+
+    package init(supportsViewTransitions: Bool = true, usesHostShapedText: Bool = false) {
+        self.supportsViewTransitions = supportsViewTransitions
+        self.usesHostShapedText = usesHostShapedText
+    }
+
+    /// Active capabilities; set once by the platform/renderer layer before rendering
+    /// (single-threaded on WASI). Apple builds use the defaults.
+    package nonisolated(unsafe) static var current = _RenderingCapabilities()
+}
