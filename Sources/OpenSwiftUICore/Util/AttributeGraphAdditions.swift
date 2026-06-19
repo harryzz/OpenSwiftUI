@@ -14,19 +14,11 @@ extension OAGInputOptions {
     }
 }
 
-// FIXME
-
-extension Subgraph {
-    var index: UInt32 {
-        get {
-            _openSwiftUIUnimplementedWarning()
-            return .zero
-        }
-        set {
-            _openSwiftUIUnimplementedWarning()
-        }
-    }
-}
+// Subgraph.index intentionally NOT defined here: the AGSubgraph.h header already declares
+// AGSubgraphGetIndex/SetIndex with AG_SWIFT_NAME(...index...), so the Clang importer provides
+// a correctly-wired `Subgraph.index` (→ C++ Subgraph::index()/set_index()). The previous stub
+// here (returning 0 / no-op) SHADOWED that import and corrupted DynamicViewList + ForEach
+// child ordering, OOB'ing at scale. Removing the shadow lets the engine-backed index work.
 
 // FIXME
 extension Graph {
