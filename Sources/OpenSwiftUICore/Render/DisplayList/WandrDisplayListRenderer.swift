@@ -61,7 +61,13 @@ private struct WandrSinkVisitor {
                 opacity: opacity
             )
         case let .effect(effect, list):
-            append(effect: effect, list: list, transform: transform, opacity: opacity)
+            // The effect item's frame.origin positions its content within the parent — the
+            // layout offset (rows/columns/sub-view placement) lives here, exactly as it does
+            // in a .content item's frame. Fold it into the transform before applying the
+            // effect, else nested/dynamic content (ForEach, stacks) collapses to the origin.
+            let framed = CGAffineTransform(translationX: item.frame.minX, y: item.frame.minY)
+                .concatenating(transform)
+            append(effect: effect, list: list, transform: framed, opacity: opacity)
         case let .states(states):
             for (_, list) in states {
                 append(list: list, transform: transform, opacity: opacity)
