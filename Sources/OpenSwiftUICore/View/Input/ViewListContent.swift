@@ -230,9 +230,17 @@ private struct PlaceholderInfo: StatefulRule, ObservedAttribute, AsyncAttribute 
         let child = Subgraph(graph: parentSubgraph.graph)
         parentSubgraph.addChild(child)
         let shouldParentToPlaceholder = inputs.base[ViewListShouldParentToPlaceholderSubgraph.self]
+        // [wasm32] Subgraph's foreign-reference class-ness doesn't cross module to this non-cxx-
+        // interop consumer, so `!==` is unavailable; use the Compute-provided identity helper.
+        #if arch(wasm32)
+        if !parentSubgraph.isIdentical(to: contentSubgraph), shouldParentToPlaceholder {
+            contentSubgraph.addChild(child, tag: 1)
+        }
+        #else
         if parentSubgraph !== contentSubgraph, shouldParentToPlaceholder {
             contentSubgraph.addChild(child, tag: 1)
         }
+        #endif
         child.apply {
             // TODO: GraphReuseOptions on v7
             let indirectMap = IndirectAttributeMap(subgraph: child)

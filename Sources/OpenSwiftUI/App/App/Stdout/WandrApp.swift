@@ -28,6 +28,14 @@ import OpenSwiftUICore
 // (Remove the leak once Subgraph.forEach has a *C variant.)
 nonisolated(unsafe) private var _wandrHostKeepAlive: AnyObject?
 nonisolated(unsafe) private var _wandrRedraw: (() -> Void)?
+nonisolated(unsafe) private var _wandrRender: (() -> Void)?
+
+// [wandr debug] flush-safe stderr trace to locate the wasm render-drive hang (survives timeout-kill).
+#if os(WASI)
+@inline(never) private func _wandrTrace(_ s: String) { fputs("[WANDR] \(s)\n", stderr); fflush(stderr) }
+#else
+@inline(never) private func _wandrTrace(_ s: String) {}
+#endif
 
 /// Build `app`'s graph + first scene and render it once through the wandr renderer
 /// into `options.sink`. The host is retained for the process lifetime (a guest keeps
@@ -46,13 +54,19 @@ public func renderWandrAppOnce(
         supportsViewTransitions: false,
         usesHostShapedText: true
     )
+    _wandrTrace("renderWandrAppOnce: enter")
     Update.dispatchImmediately(reason: nil) {
+        _wandrTrace("dispatchImmediately: in")
         let graph = AppGraph(app: app)
+        _wandrTrace("AppGraph created")
         graph.instantiate()
+        _wandrTrace("instantiate DONE")
         AppGraph.shared = graph
         guard let item = graph.rootSceneList?.items.first else {
+            _wandrTrace("no root scene item")
             return
         }
+        _wandrTrace("rootScene ok")
         let rootView = item.value.view
             .frame(width: options.surface.width, height: options.surface.height)
         let host = WandrRendererHost(
@@ -60,10 +74,18 @@ public func renderWandrAppOnce(
             environment: item.environment,
             options: options
         )
+        _wandrTrace("host created")
         _wandrHostKeepAlive = host
         _wandrRedraw = { host.redraw() }
+        // Re-render must run inside an update transaction (like the initial render below) so a
+        // re-evaluated body that creates new attributes has a current subgraph — otherwise
+        // Attribute.init(value:) hits "attempting to create attribute with no subgraph".
+        _wandrRender = { Update.dispatchImmediately(reason: nil) { host.renderOnce() } }
+        _wandrTrace("renderOnce START")
         host.renderOnce()
+        _wandrTrace("renderOnce DONE")
     }
+    _wandrTrace("renderWandrAppOnce: exit")
 }
 
 /// Re-walk the current display list into the sink passed to `renderWandrAppOnce`.
@@ -71,5 +93,22 @@ public func renderWandrAppOnce(
 @_spi(WandrRenderer)
 public func wandrRedraw() {
     _wandrRedraw?()
+}
+
+/// Apply a state mutation (e.g. a @State write from a raw reactor input handler) INSIDE an
+/// OpenSwiftUI update transaction, so the change is registered as a graph invalidation and the
+/// next `wandrRedraw()` re-evaluates the affected view bodies. The host calls input handlers
+/// outside any transaction, so a bare @State write would not invalidate anything.
+@_spi(WandrRenderer)
+public func wandrApplyChange(_ body: () -> Void) {
+    Update.dispatchImmediately(reason: nil, body)
+}
+
+/// Re-RUN the graph (re-evaluate invalidated view bodies) and render the result into the sink.
+/// Unlike `wandrRedraw()` (which only re-walks the already-computed display list), this picks up
+/// state changes. Call it on the frame after a `wandrApplyChange`.
+@_spi(WandrRenderer)
+public func wandrRender() {
+    _wandrRender?()
 }
 #endif

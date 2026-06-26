@@ -126,11 +126,18 @@ extension Subgraph {
     }
 
     package func willRemove() {
+        // Collect first, then process: each `removableType.willRemove` callback can free subgraphs,
+        // and the (fork's) `forEach`/`apply` iterates the subgraph tree LIVE (push children, pop
+        // later) — so freeing mid-traversal frees a subgraph still pending on the stack →
+        // `Subgraph::is_valid()` use-after-free. Decoupling iteration from the side effects fixes it.
+        var removables: [(RemovableAttribute.Type, AnyAttribute)] = []
         forEach(.removable) { attribute in
-            let type = attribute._bodyType
-            if let removableType = type as? RemovableAttribute.Type {
-                removableType.willRemove(attribute: attribute)
+            if let removableType = attribute._bodyType as? RemovableAttribute.Type {
+                removables.append((removableType, attribute))
             }
+        }
+        for (removableType, attribute) in removables {
+            removableType.willRemove(attribute: attribute)
         }
     }
 

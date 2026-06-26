@@ -444,7 +444,12 @@ struct DynamicContainerInfo<Adapter>: StatefulRule, AsyncAttribute, ObservedAttr
                             target = i >= 0 ? i : info.items.count &- (info.unusedCount + info.removedCount)
                         }
                     }
-                    info.items[target].subgraph.index = UInt32(index)
+                    // A pooled item whose subgraph was invalidated (refcount → 0) can still be in
+                    // range here; setting its index aborts with "accessing invalidated subgraph".
+                    // Skip it (the storage stays alive via the retain fix, so isValid is safe).
+                    if info.items[target].subgraph.isValid {
+                        info.items[target].subgraph.index = UInt32(index)
+                    }
                 }
             }
         } else {

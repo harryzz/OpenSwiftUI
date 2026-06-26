@@ -10,6 +10,7 @@ public import Foundation
 package import OpenAttributeGraphShims
 import OpenSwiftUI_SPI
 
+
 // MARK: - GeometryReader
 
 /// A container view that defines its content as a function of its own size and
@@ -90,7 +91,7 @@ public struct GeometryReader<Content>: View, UnaryView, PrimitiveView where Cont
             )
             let content = withObservation {
                 $view.syncMainIfReferences { v in
-                    v.content(proxy)
+                    return v.content(proxy)
                 }
             }
             value = .init(root: .init(GeometryReaderLayout()), content: content)

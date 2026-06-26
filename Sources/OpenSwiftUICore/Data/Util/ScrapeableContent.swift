@@ -185,6 +185,16 @@ package struct ScrapeableContent {
     }
 }
 
+// [wasm32] Subgraph identity token. Foreign-reference Subgraph doesn't support ObjectIdentifier on
+// non-Darwin, so use its stable storage-pointer bits (rawIdentity). On Darwin Subgraph is a CF class.
+#if arch(wasm32)
+private typealias _ScrapeSubgraphID = UInt
+private func _scrapeID(_ s: Subgraph) -> _ScrapeSubgraphID { s.rawIdentity }
+#else
+private typealias _ScrapeSubgraphID = ObjectIdentifier
+private func _scrapeID(_ s: Subgraph) -> _ScrapeSubgraphID { ObjectIdentifier(s) }
+#endif
+
 extension Subgraph {
     private struct Map {
         struct Key: Hashable {
@@ -193,11 +203,11 @@ extension Subgraph {
             #if !canImport(Darwin)
             // FIXME: Subgraph on non-Darwin platform does not conform to Hashable by default
             func hash(into hasher: inout Hasher) {
-                hasher.combine(ObjectIdentifier(subgraph))
+                hasher.combine(_scrapeID(subgraph))
             }
 
             static func == (a: Key, b: Key) -> Bool {
-                ObjectIdentifier(a.subgraph) == ObjectIdentifier(b.subgraph)
+                _scrapeID(a.subgraph) == _scrapeID(b.subgraph)
             }
             #endif
         }
@@ -211,8 +221,8 @@ extension Subgraph {
             map[key] = nodes
         }
 
-        func content(for subgraph: Subgraph, updated: inout Set<ObjectIdentifier>) -> ScrapeableContent? {
-            let (isInserted, m) = updated.insert(ObjectIdentifier(subgraph))
+        func content(for subgraph: Subgraph, updated: inout Set<_ScrapeSubgraphID>) -> ScrapeableContent? {
+            let (isInserted, m) = updated.insert(_scrapeID(subgraph))
             guard isInserted else {
                 return nil
             }
@@ -236,7 +246,7 @@ extension Subgraph {
             }
             map.addItem(item, for: self)
         }
-        var updated: Set<ObjectIdentifier> = []
+        var updated: Set<_ScrapeSubgraphID> = []
         return map.content(for: self, updated: &updated) ?? .init(nodes: [], children: [])
     }
 }

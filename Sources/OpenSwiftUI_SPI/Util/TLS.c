@@ -8,11 +8,21 @@
 #include "TLS.h"
 #include <stdatomic.h>
 
-static _Thread_local void * _perThreadGeometryProxyData = NULL;
-static _Thread_local int64_t _perThreadUpdateCount = 0;
-static _Thread_local uint32_t _perThreadTransactionID = 0;
-static _Thread_local void * _perThreadTransactionData = NULL;
-static _Thread_local void * _perThreadLayoutData = NULL;
+// [wasm32] wasm32-wasip1 is single-threaded and `_Thread_local` TLS is not initialized in this
+// toolchain (no TLS segment setup) → reads/writes hit a garbage/aliased slot, so the layout
+// `placementData` pointer does not round-trip and `setGeometry` sprays a ViewGeometry CGFloat over
+// adjacent (subgraph-pointer) memory → SIGSEGV. Single-threaded ⇒ a plain `static` global IS the TLS.
+#if defined(__wasi__)
+#define OPENSWIFTUI_TLS
+#else
+#define OPENSWIFTUI_TLS _Thread_local
+#endif
+
+static OPENSWIFTUI_TLS void * _perThreadGeometryProxyData = NULL;
+static OPENSWIFTUI_TLS int64_t _perThreadUpdateCount = 0;
+static OPENSWIFTUI_TLS uint32_t _perThreadTransactionID = 0;
+static OPENSWIFTUI_TLS void * _perThreadTransactionData = NULL;
+static OPENSWIFTUI_TLS void * _perThreadLayoutData = NULL;
 
 void _setThreadGeometryProxyData(void * data) {
     _perThreadGeometryProxyData = data;

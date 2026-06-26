@@ -573,7 +573,16 @@ private class ForEachState<Data, ID, Content> where Data: RandomAccessCollection
     }
 
     func eraseItem(_ item: Item) {
-        item.subgraph.willRemove()
+        // A stale item (seed != seed) may have had its subgraph invalidated already (refcount → 0
+        // via the parent cascade). willRemove() on an invalidated subgraph faults in apply_tmpl
+        // (the traversal), so guard ONLY that. But removeChild must run UNCONDITIONALLY: it just
+        // unlinks the child from the parent (no traversal, safe with the foreign-ref keeping the
+        // storage alive). Skipping it leaves the invalidated item's subgraph as a child of the
+        // parent, so its stale output keeps rendering — e.g. the consumed tile of a 2048 merge
+        // ghosts under the merged tile ("2" drawn over "4"). See repros/openswiftui-wasm/RESUME.md.
+        if item.isValid {
+            item.subgraph.willRemove()
+        }
         parentSubgraph.removeChild(item.subgraph)
         item.isRemoved = true
         item.timeToLive = 0

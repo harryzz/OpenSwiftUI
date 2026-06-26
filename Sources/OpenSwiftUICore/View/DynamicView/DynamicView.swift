@@ -155,7 +155,11 @@ private struct DynamicViewList<V>: StatefulRule, AsyncAttribute where V: Dynamic
 
         for item in allItems.wrappedValue {
             let item = item.takeUnretainedValue()
-            guard item.matches(type: type, id: id) else {
+            // A parent-subgraph cascade can invalidate an item's subgraph without calling
+            // Item.invalidate() (which removes it from allItems), leaving a stale entry whose
+            // subgraph._graph is NULL. Reusing it → AGSubgraphAddChild precondition failure
+            // ("child subgraph must have same graph"). Mirror the lastItem fast-path's isValid guard.
+            guard item.matches(type: type, id: id), item.isValid else {
                 continue
             }
             item.retain()
