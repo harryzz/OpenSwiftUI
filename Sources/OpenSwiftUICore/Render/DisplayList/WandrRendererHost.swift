@@ -46,17 +46,29 @@ final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRende
     }
 
     package func renderOnce() {
-        render(interval: .zero, targetTimestamp: nil)
+        // [wandr] Defer subgraph TEARDOWN across the whole render (not per-UpdateStack), so a child
+        // subgraph invalidated during reconciliation isn't freed+recycled while a LATER reader in the
+        // same render still resolves a weak/indirect ref into it (the move-2 use-after-free). This is
+        // the side-effect-free half of what withMainThreadHandler does — it toggles ONLY
+        // _deferring_subgraph_invalidation (the teardown gate), not the main-thread update dispatch
+        // that regressed move 0. endDeferring drains+reclaims at scope exit (no leak). Matches Apple.
+        viewGraph.graph.withoutSubgraphInvalidation {
+            render(interval: .zero, targetTimestamp: nil)
+        }
     }
 
     /// Re-walk the current (already-computed) display list into `options.sink`, without
     /// re-running the graph. The guest calls this every frame (after pointing the sink's
     /// CGContext at the new back-buffer) so a static scene repaints under double-buffering.
     package func redraw() {
-        Update.begin()
-        let (list, version) = viewGraph.displayList()
-        Update.end()
-        list.renderToWandrSink(options.sink, surface: options.surface, version: version)
+        // [wandr] displayList() pulls any pending dirty graph update; defer teardown across it too
+        // (see renderOnce) so the move-driving update can't free a still-read subgraph mid-pass.
+        viewGraph.graph.withoutSubgraphInvalidation {
+            Update.begin()
+            let (list, version) = viewGraph.displayList()
+            Update.end()
+            list.renderToWandrSink(options.sink, surface: options.surface, version: version)
+        }
     }
 
     package func updateRootView() {
