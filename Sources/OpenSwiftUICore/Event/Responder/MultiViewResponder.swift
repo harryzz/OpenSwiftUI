@@ -25,7 +25,9 @@ open class MultiViewResponder: ViewResponder {
     // MARK: - MultiViewResponder: ResponderNode
 
     override open func bindEvent(_ event: any EventType) -> ResponderNode? {
-        for child in children {
+        // [wandr] Iterate front-to-back (last-drawn child first) so an event binds to the TOPMOST
+        // gesture that contains it — e.g. a dialog/overlay drawn over the board wins over the board.
+        for child in children.reversed() {
             guard let result = child.bindEvent(event) else {
                 continue
             }

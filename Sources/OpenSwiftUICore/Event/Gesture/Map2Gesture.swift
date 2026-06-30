@@ -59,7 +59,13 @@ extension Gesture {
         combined(with: other) { phase, otherPhase in
             switch otherPhase {
             case .possible:
-                if advanceImmediately || !(CoreTesting.isRunning || GestureContainerFeature.isEnabled) {
+                // [wandr] Gesture arbitration (pausing a gesture to let a competing one win) is
+                // deferred — LayoutGestureChildProxy is stubbed. So advance immediately even with
+                // the gesture container enabled (we enable it only for geometric hit-test binding):
+                // otherwise a gesture pauses forever waiting for an arbitration decision that never
+                // arrives and never completes (first-tap/swipe miss on device). Drop
+                // GestureContainerFeature from the pause gate; restore it with arbitration (piece 5a).
+                if advanceImmediately || !CoreTesting.isRunning {
                     switch phase {
                     case let .ended(value):
                         return .active(value)
