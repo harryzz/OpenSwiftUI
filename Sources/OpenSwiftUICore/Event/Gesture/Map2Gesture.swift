@@ -15,7 +15,7 @@ extension Gesture {
         with other: G,
         body: @escaping (GesturePhase<Value>, GesturePhase<G.Value>) -> GesturePhase<T>
     ) -> some Gesture<T> where G: Gesture {
-        modifier(Map2Gesture(content: other, body: body))
+        modifier(Map2Gesture(content: other, body: Map2GestureBody(call: body)))
     }
 
     package func zip<G>(
@@ -115,10 +115,20 @@ extension GesturePhase {
 
 // MARK: - Map2Gesture
 
+// Wraps Map2Gesture's body closure in a struct so it can be projected into an indirect
+// attribute via PointerOffset. A BARE function-typed stored field cannot be projected:
+// `&$0.body` reabstracts the closure to a temporary, so PointerOffset.of yields a garbage
+// offset (wasm) / crashes (native -Onone and -O alike). Projecting a struct that *holds* the
+// closure is sound (measured). Mirrors CallbacksGesture's `_Body` wrapper. See WASM-PORT-LOG.md
+// "BUG G2" + repros/openswiftui-wasm/pointeroffset-probe.
+fileprivate struct Map2GestureBody<InputValue, ContentValue, OutputValue> {
+    var call: (GesturePhase<InputValue>, GesturePhase<ContentValue>) -> GesturePhase<OutputValue>
+}
+
 struct Map2Gesture<InputValue, Content, OutputValue>: GestureModifier where Content: Gesture {
     var content: Content
 
-    var body: (GesturePhase<InputValue>, GesturePhase<Content.Value>) -> GesturePhase<OutputValue>
+    fileprivate var body: Map2GestureBody<InputValue, Content.Value, OutputValue>
 
     nonisolated static func _makeGesture(
         modifier: _GraphValue<Map2Gesture<InputValue, Content, OutputValue>>,
@@ -167,7 +177,7 @@ extension Map2Gesture: PrimitiveDebuggableGesture {}
 // MARK: - Map2Phase
 
 private struct Map2Phase<InputValue, ContentValue, OutputValue>: ResettableGestureRule, CustomStringConvertible {
-    @Attribute var body: (GesturePhase<InputValue>, GesturePhase<ContentValue>) -> GesturePhase<OutputValue>
+    @Attribute var body: Map2GestureBody<InputValue, ContentValue, OutputValue>
     @Attribute var phase1: GesturePhase<InputValue>
     @Attribute var phase2: GesturePhase<ContentValue>
     @Attribute var resetSeed: UInt32
@@ -180,7 +190,7 @@ private struct Map2Phase<InputValue, ContentValue, OutputValue>: ResettableGestu
         guard resetIfNeeded() else {
             return
         }
-        value = body(phase1, phase2)
+        value = body.call(phase1, phase2)
     }
 
     var description: String {
