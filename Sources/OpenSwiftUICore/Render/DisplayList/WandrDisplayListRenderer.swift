@@ -111,10 +111,15 @@ private struct WandrSinkVisitor {
             // Color is the environment-resolved foreground (white fallback when unset);
             // opacity carries the accumulated effect opacity.
             let c = textView.wasmColor
+            // [wandr] +20% wrapping-width slack: OpenSwiftUI underestimates a word's measured width
+            // on wasm (the host/Skia renders ~a glyph wider), which wrapped tight labels like
+            // "SCORE" → "SCOR"/"E". `width` is only the paragraph maxWidth (governs WRAPPING); the
+            // paint stays left-aligned at `x`, so the slack just prevents the spurious wrap and
+            // leaves text that already fit untouched.
             sink.drawText(
                 textView.wasmPlainString,
                 x: Double(frame.minX), y: Double(frame.minY),
-                width: Double(frame.width), height: Double(frame.height),
+                width: Double(frame.width) * 1.2, height: Double(frame.height),
                 fontSize: Double(textView.wasmFontSize),
                 red: c?.red ?? 1.0, green: c?.green ?? 1.0, blue: c?.blue ?? 1.0,
                 opacity: (c?.opacity ?? 1.0) * opacity
