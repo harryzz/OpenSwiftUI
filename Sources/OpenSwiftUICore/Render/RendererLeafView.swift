@@ -42,8 +42,72 @@ extension RendererLeafView {
                 )
             )
         }
+        // [wandr] Geometric hit-testing: emit a leaf ViewResponder carrying this view's frame so
+        // gestures can test the hit location against their content. Without this, a gesture's
+        // children are empty and `containsGlobalPoints` returns an empty mask (the old structural,
+        // location-blind fallback). The frame uses the same animated position/size the display list
+        // draws with. See LeafViewRespondersRule.
+        if inputs.preferences.requiresViewResponders {
+            outputs.preferences.viewResponders = Attribute(
+                LeafViewRespondersRule(
+                    position: inputs.animatedPosition(),
+                    size: inputs.animatedCGSize()
+                )
+            )
+        }
         return outputs
     }
+}
+
+// MARK: - RendererLeafViewResponder
+
+/// [wandr] A geometry-carrying leaf responder: reports which of the queried global points fall
+/// inside its (axis-aligned) frame. This is the geometry that lets `ViewResponder.hitTest` resolve
+/// a tap/drag to the gesture whose content was actually hit. Transformed hit regions
+/// (.offset/.scaleEffect/.rotationEffect) and shape-precise containment are follow-ups.
+package final class RendererLeafViewResponder: ViewResponder {
+    package var frame: CGRect = .zero
+
+    package override func containsGlobalPoints(
+        _ points: [PlatformPoint],
+        cacheKey: UInt32?,
+        options: ContainsPointsOptions
+    ) -> ContainsPointsResult {
+        guard allowHitTesting, opacity >= ViewResponder.minOpacityForHitTest else {
+            return ContainsPointsResult(mask: [], priority: 0, children: [])
+        }
+        var mask: BitVector64 = []
+        for index in points.indices where frame.contains(points[index]) {
+            mask[index] = true
+        }
+        return ContainsPointsResult(mask: mask, priority: 0, children: [])
+    }
+
+    package override var descriptionName: String { "RendererLeaf" }
+}
+
+// MARK: - LeafViewRespondersRule
+
+/// [wandr] Builds (once) and keeps the leaf's `RendererLeafViewResponder` frame in sync with the
+/// view's global position/size. `position` is the view's origin in the root/global space the event
+/// `globalLocation` is delivered in, so the frame is used directly for global hit-testing.
+private struct LeafViewRespondersRule: StatefulRule, CustomStringConvertible {
+    @Attribute var position: ViewOrigin
+    @Attribute var size: CGSize
+
+    lazy var responder = RendererLeafViewResponder()
+
+    typealias Value = [ViewResponder]
+
+    mutating func updateValue() {
+        let responder = responder
+        responder.frame = CGRect(origin: position, size: size)
+        if !hasValue {
+            value = [responder]
+        }
+    }
+
+    var description: String { "LeafViewResponders" }
 }
 
 // MARK: - LeafViewLayout

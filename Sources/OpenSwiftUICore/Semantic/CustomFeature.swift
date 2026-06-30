@@ -22,7 +22,10 @@ package struct UnifiedHitTestingFeature: Feature {
 // MARK: GestureContainerFeature [TODO]
 
 struct GestureContainerFeature {
+    // [wandr] Enabled: turns on the geometric bind path in GestureResponder.bindEvent (hit-test by
+    // location against leaf-responder frames) instead of the structural first-gesture fallback.
+    // Requires geometry-carrying leaf responders (RendererLeafView.makeLeafView emits them).
     static var isEnabled: Bool {
-        false
+        true
     }
 }

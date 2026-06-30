@@ -355,6 +355,11 @@ private class GestureResponder<Modifier>: DefaultLayoutViewResponder, AnyGesture
         if options.contains(.useZDistanceAsPriority) {
             result.priority = ViewResponder.gestureContainmentPriority
         }
+        // [wandr] super already unioned our content leaves' masks (so we know whether the hit is
+        // inside our content), but the event must bind to THIS gesture — ViewGraph.sendEvents
+        // requires an AnyGestureResponder. Keep only nested gesture responders as hit-test
+        // descendants so `hitTest` stops here for plain content leaves and returns the gesture.
+        result.children = result.children.filter { $0 is any AnyGestureResponder }
         return result
     }
 

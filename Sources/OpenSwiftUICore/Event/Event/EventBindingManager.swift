@@ -144,6 +144,14 @@ final public class EventBindingManager {
             _gtrace("EBM.bindResponder structural-bound")
             return bound
         }
+        // [wandr] With geometric hit-testing on, root.bindEvent already did a location-aware
+        // hit-test; a nil result means the point hit no gesture's content, so we must NOT fall
+        // back to "first valid gesture regardless of location" (that's the old location-blind
+        // behavior). Only use the structural fallback when the geometric path is disabled.
+        guard !GestureContainerFeature.isEnabled else {
+            _gtrace("EBM.bindResponder geometric-miss")
+            return nil
+        }
         _gtrace("EBM.bindResponder visit-fallback")
         guard HitTestableEvent(event) != nil else {
             return nil
