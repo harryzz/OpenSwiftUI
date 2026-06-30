@@ -129,16 +129,23 @@ private struct AnyGestureInfo<V>: StatefulRule {
     ) -> Value {
         let childGraph = Subgraph(graph: parentSubgraph.graph)
         parentSubgraph.addChild(childGraph)
+        // [wandr] Capture this rule's own attribute identity BEFORE entering childGraph.apply.
+        // Subgraph.apply clears the current-attribute for its body (you are constructing the
+        // subgraph, not evaluating an attribute), so reading `attribute` — which is
+        // StatefulRule.attribute = Attribute(identifier: AnyAttribute.current!) — inside the body
+        // traps on the nil current. We are invoked from updateValue, so `attribute` resolves
+        // correctly here (current == self). Verified via symbolized wasm backtrace.
+        let containerAttribute = attribute
         return childGraph.apply {
             var childInputs = inputs
             childInputs.copyCaches()
             childInputs.resetSeed = Attribute(AnyResetSeed<V>(
                 resetSeed: inputs.resetSeed,
-                info: attribute
+                info: containerAttribute
             ))
             let childOutputs = storage.makeChild(
                 uniqueId: uniqueId,
-                container: attribute,
+                container: containerAttribute,
                 inputs: childInputs
             )
             outputs.attachIndirectOutputs(childOutputs)
