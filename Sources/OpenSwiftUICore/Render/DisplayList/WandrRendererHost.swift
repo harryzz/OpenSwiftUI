@@ -11,7 +11,7 @@ import Foundation
 
 // MARK: - WandrRendererHost
 
-final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRenderDelegate where Content: View {
+final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRenderDelegate, EventGraphHost, EventBindingManagerDelegate where Content: View {
     typealias RootView = ModifiedContent<Content, HitTestBindingModifier>
 
     package let viewGraph: ViewGraph
@@ -19,6 +19,11 @@ final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRende
     package let rootView: Content
     package let environment: EnvironmentValues
     package let options: _RendererConfiguration.WandrOptions
+
+    // [wandr] Pointer/gesture event routing. The host owns the top-level binding
+    // manager that `WandrApp.wandrSendPointer` feeds; it binds an incoming event to
+    // a responder (hit-test / structural) and forwards to that responder's GestureGraph.
+    package let eventBindingManager: EventBindingManager = .init()
 
     package var currentTimestamp: Time = .zero
     package var propertiesNeedingUpdate: ViewRendererHostProperties = .all
@@ -34,15 +39,45 @@ final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRende
         self.environment = environment
         self.options = options
         Update.begin()
-        // The wandr renderer (like stdout) only needs layout + display list output.
-        viewGraph = ViewGraph(rootViewType: RootView.self, requestedOutputs: [.displayList, .layout])
+        // The wandr renderer needs layout + display list output, plus view responders
+        // so `.onTapGesture` / `DragGesture` produce a hit-testable responder tree.
+        viewGraph = ViewGraph(rootViewType: RootView.self, requestedOutputs: [.displayList, .layout, .viewResponders])
         renderer = DisplayList.ViewRenderer(
             platform: .init(definition: WandrPlatformViewDefinition.self)
         )
         renderer.configuration = .wandr(options)
         renderer.host = self
         initializeViewGraph()
+        // [wandr] Wire the binding manager AFTER the graph is up; `host` is read on the
+        // event path to find `responderNode` / forward events.
+        eventBindingManager.host = self
+        eventBindingManager.delegate = self
         Update.end()
+    }
+
+    // MARK: - EventGraphHost
+
+    package var responderNode: ResponderNode? {
+        viewGraph.responderNode
+    }
+
+    package var focusedResponder: ResponderNode? {
+        eventBindingManager.focusedResponder
+    }
+
+    // MARK: - EventBindingManagerDelegate
+
+    package func didUpdate(
+        phase: GesturePhase<Void>,
+        in eventBindingManager: EventBindingManager
+    ) {
+        // [wandr] Mirror CAHostingLayer: once a gesture sequence terminates, drop the
+        // bindings so the next down/up starts fresh. Reset is a no-op subgraph-wise
+        // (we never force-tear-down — see resetEvents) so this is trap-safe.
+        guard phase.isTerminal else {
+            return
+        }
+        eventBindingManager.reset(resetForwardedEventDispatchers: false)
     }
 
     package func renderOnce() {
@@ -117,7 +152,12 @@ final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRende
     package func updateAccessibilityEnvironment() {}
 
     package func `as`<T>(_ type: T.Type) -> T? {
-        if ViewGraphRenderDelegate.self == T.self {
+        if EventGraphHost.self == T.self {
+            // [wandr] Safe runtime cast (NOT the unsafeBitCast-of-existential trick used
+            // below): casting an existential of EventGraphHost across protocol types via
+            // unsafeBitCast corrupts ARC on wasm32-wasip1. `self as? T` is sound.
+            return self as? T
+        } else if ViewGraphRenderDelegate.self == T.self {
             return unsafeBitCast(self as any ViewGraphRenderDelegate, to: T.self)
         } else if DisplayList.ViewRenderer.self == T.self {
             return unsafeBitCast(renderer, to: T.self)

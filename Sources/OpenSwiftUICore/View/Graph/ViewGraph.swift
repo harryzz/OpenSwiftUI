@@ -612,11 +612,23 @@ extension ViewGraph {
 
 extension ViewGraph {
     package var responderNode: ResponderNode? {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Build a fresh root `MultiViewResponder` over the current top-level
+        // responders each time. Construction must happen with a current subgraph so
+        // `ViewResponder.init` can resolve `ViewGraph.current.delegate` as the host;
+        // `globalSubgraph.apply` pins `Subgraph.current` for the duration. The bound
+        // responder we ultimately route to is the persistent child (a GestureResponder),
+        // so this transient root is cheap and safe.
+        instantiateIfNeeded()
+        _gtrace("VG.responderNode build n=\(rootResponders?.count ?? -1)")
+        return globalSubgraph.apply {
+            let root = MultiViewResponder()
+            root.children = rootResponders ?? []
+            return root
+        }
     }
 
     package func setInheritedPhase(_ phase: _GestureInputs.InheritedPhase) {
-        _openSwiftUIUnimplementedFailure()
+        inheritedPhase = phase
     }
 
     package func sendEvents(
@@ -624,11 +636,32 @@ extension ViewGraph {
         rootNode: ResponderNode,
         at time: Time
     ) -> GesturePhase<Void> {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Route to the bound responder's own GestureGraph. The binding manager
+        // hands us the responder it bound the event to; for a `.onTapGesture` /
+        // `DragGesture` that is an `AnyGestureResponder`, which owns the per-gesture
+        // GestureGraph that consumes events and drives the gesture's callbacks.
+        _gtrace("VG.sendEvents enter")
+        guard let responder = rootNode as? any AnyGestureResponder else {
+            _gtrace("VG.sendEvents not-AnyGestureResponder")
+            return .failed
+        }
+        _gtrace("VG.sendEvents gestureContainer-pre")
+        _ = responder.gestureContainer
+        guard responder.isValid else {
+            _gtrace("VG.sendEvents not-valid")
+            return .failed
+        }
+        _gtrace("VG.sendEvents gestureGraph.sendEvents-pre")
+        return responder.gestureGraph.sendEvents(events, rootNode: rootNode, at: time)
     }
 
     package func resetEvents() {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Deliberately a no-op on the subgraph teardown front. The host uses a
+        // "never force-tear-down" strategy (Subgraph.forEach swiftcall mislowering on
+        // wasm32-wasip1), so we do NOT uninstantiate gesture subgraphs here. Per-sequence
+        // freshness is handled inside GestureGraph.sendEvents by bumping the reset seed
+        // after a terminal phase, which resets EventListener tracking in-graph.
+        inheritedPhase = .failed
     }
 }
 

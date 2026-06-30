@@ -6,6 +6,16 @@
 //  Status: WIP
 
 import OpenAttributeGraphShims
+#if os(WASI)
+import WASILibc
+#endif
+
+// [GTRACE] temporary stderr probe to localize the gesture-dispatch SIGILL on wasm.
+@inline(never) package func _gtrace(_ s: String) {
+    #if os(WASI)
+    fputs("[GTRACE] \(s)\n", stderr); fflush(stderr)
+    #endif
+}
 
 // MARK: - GestureGraphDelegate
 
@@ -35,7 +45,21 @@ final package class GestureGraph: GraphHost, EventGraphHost, CustomStringConvert
 
     init(rootResponder: AnyGestureResponder) {
         self.rootResponder = rootResponder
-        _openSwiftUIUnimplementedFailure()
+        let manager = EventBindingManager()
+        self.eventBindingManager = manager
+        // [wandr] Mirror ViewGraph.init: pin the new graph's globalSubgraph as current so
+        // the inherited @Attribute storage is created inside this host's graph.
+        let data = GraphHost.Data()
+        Subgraph.current = data.globalSubgraph
+        _gestureTime = Attribute(value: .zero)
+        _gestureEvents = Attribute(value: [:])
+        _inheritedPhase = Attribute(value: .defaultValue)
+        _gestureResetSeed = Attribute(value: .zero)
+        _gesturePreferenceKeys = Attribute(value: .init())
+        nextUpdateTime = .infinity
+        super.init(data: data)
+        Subgraph.current = nil
+        manager.host = self
     }
 
     package var description: String {
@@ -43,7 +67,38 @@ final package class GestureGraph: GraphHost, EventGraphHost, CustomStringConvert
     }
 
     override package func instantiateOutputs() {
-        _openSwiftUIUnimplementedFailure()
+        _gtrace("GG.instantiateOutputs enter")
+        guard let rootResponder else {
+            _gtrace("GG.instantiateOutputs no-rootResponder")
+            return
+        }
+        // [wandr] Force the EventBindingBridge into existence. GestureResponder creates
+        // it lazily and, in doing so, sets `self.delegate = bridge`. The delegate is what
+        // `enqueueAction` (and therefore CallbacksPhase's gesture-action dispatch via
+        // `GestureGraph.current.enqueueAction`) routes through. Without this, tap actions
+        // would be silently dropped.
+        _gtrace("GG.instantiateOutputs eventSources-pre")
+        _ = rootResponder.eventSources
+        _gtrace("GG.instantiateOutputs makeGesture-pre")
+        let outputs: _GestureOutputs<Void> = rootSubgraph.apply {
+            var inputs = _GestureInputs(
+                rootResponder.inputs,
+                viewSubgraph: rootResponder.viewSubgraph,
+                events: $gestureEvents,
+                time: $gestureTime,
+                resetSeed: $gestureResetSeed,
+                inheritedPhase: $inheritedPhase,
+                gesturePreferenceKeys: $gesturePreferenceKeys
+            )
+            // `.gestureGraph` makes the gesture's phase logic build inside THIS graph
+            // (view inputs still resolve in the ViewGraph via an indirect child subgraph),
+            // and routes CallbacksPhase actions through this graph's delegate.
+            inputs.options.insert(.gestureGraph)
+            return rootResponder.makeGesture(inputs: inputs)
+        }
+        _gtrace("GG.instantiateOutputs makeGesture-done")
+        $rootPhase = outputs.phase
+        _gtrace("GG.instantiateOutputs done")
     }
 
     override package func uninstantiateOutputs() {
@@ -88,10 +143,34 @@ final package class GestureGraph: GraphHost, EventGraphHost, CustomStringConvert
         rootNode: ResponderNode,
         at time: Time
     ) -> GesturePhase<Void> {
+        _gtrace("GG.sendEvents enter")
         guard let rootResponder, rootResponder.isValid else {
+            _gtrace("GG.sendEvents invalid-rootResponder")
             return .failed
         }
-        _openSwiftUIUnimplementedFailure()
+        return Update.perform {
+            _gtrace("GG.sendEvents instantiateIfNeeded-pre")
+            instantiateIfNeeded()
+            guard isInstantiated else {
+                _gtrace("GG.sendEvents not-instantiated")
+                return .failed
+            }
+            gestureTime = time
+            gestureEvents = events
+            // Drive a transactional update so the (transactional) CallbacksPhase runs and
+            // enqueues the gesture action, then read back the resolved root phase.
+            _gtrace("GG.sendEvents runTransaction-pre")
+            runTransaction()
+            _gtrace("GG.sendEvents runTransaction-done")
+            let phase = rootPhase ?? .failed
+            // [wandr] Re-arm for the next gesture sequence in-graph (NO subgraph teardown):
+            // bumping the reset seed makes EventListener clear its tracking id on the next
+            // send, so a fresh down/up after this terminal phase binds and fires cleanly.
+            if phase.isTerminal {
+                gestureResetSeed &+= 1
+            }
+            return phase
+        }
     }
 
     package func resetEvents() {

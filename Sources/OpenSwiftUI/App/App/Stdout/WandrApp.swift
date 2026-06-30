@@ -30,6 +30,9 @@ nonisolated(unsafe) private var _wandrHostKeepAlive: AnyObject?
 nonisolated(unsafe) private var _wandrRedraw: (() -> Void)?
 nonisolated(unsafe) private var _wandrRender: (() -> Void)?
 nonisolated(unsafe) private var _wandrRenderFrame: ((Double) -> Bool)?
+// [wandr] Pointer/gesture entry point. (phase, x, y, serial) → routes a MouseEvent
+// through the host's EventBindingManager so `.onTapGesture` / DragGesture callbacks fire.
+nonisolated(unsafe) private var _wandrSendEvent: ((Int, Double, Double, Int) -> Void)?
 
 // [wandr debug] flush-safe stderr trace to locate the wasm render-drive hang (survives timeout-kill).
 #if os(WASI)
@@ -87,6 +90,35 @@ public func renderWandrAppOnce(
             Update.dispatchImmediately(reason: nil) { pending = host.renderFrame(interval: interval) }
             return pending
         }
+        _wandrSendEvent = { phase, x, y, serial in
+            // Must run inside an update transaction: the gesture pipeline enqueues its
+            // action on the Update queue, which only drains when the depth returns to 0.
+            Update.dispatchImmediately(reason: nil) {
+                let eventPhase: EventPhase
+                switch phase {
+                case 0: eventPhase = .began   // pointer down
+                case 1: eventPhase = .active  // pointer move
+                case 2: eventPhase = .ended   // pointer up
+                default: eventPhase = .failed // cancel
+                }
+                let location = CGPoint(x: x, y: y)
+                let event = MouseEvent(
+                    timestamp: host.currentTimestamp,
+                    button: .primary,
+                    phase: eventPhase,
+                    location: location,
+                    globalLocation: location,
+                    modifiers: []
+                )
+                // Use EventID(type:serial:) with an integer serial — NEVER the NSObject
+                // EventID.init(_:subtype:) overload, which unsafeBitCasts an existential
+                // and corrupts ARC on wasm32-wasip1.
+                let id = EventID(type: MouseEvent.self, serial: serial)
+                _wandrTrace("SP send-pre phase=\(phase)")
+                host.eventBindingManager.send([id: event])
+                _wandrTrace("SP send-post phase=\(phase)")
+            }
+        }
         _wandrTrace("renderOnce START")
         host.renderOnce()
         _wandrTrace("renderOnce DONE")
@@ -126,5 +158,21 @@ public func wandrRender() {
 @_spi(WandrRenderer)
 public func wandrRenderFrame(_ interval: Double) -> Bool {
     _wandrRenderFrame?(interval) ?? false
+}
+
+/// Feed one raw pointer event into OpenSwiftUI's gesture pipeline.
+///
+/// - Parameters:
+///   - phase: `0` = down (→ `.began`), `1` = move (→ `.active`), `2` = up (→ `.ended`),
+///     anything else = cancel (→ `.failed`).
+///   - x, y: pointer position in surface (global) coordinates.
+///   - serial: a sequence id. Use the SAME serial for a down→move→up stream so the gesture
+///     tracks it as one interaction; start a new serial for the next press.
+///
+/// The host routes the event via hit-testing to the bound view's gesture (e.g.
+/// `.onTapGesture`) and that gesture's action fires when the transaction drains.
+@_spi(WandrRenderer)
+public func wandrSendPointer(phase: Int, x: Double, y: Double, serial: Int) {
+    _wandrSendEvent?(phase, x, y, serial)
 }
 #endif

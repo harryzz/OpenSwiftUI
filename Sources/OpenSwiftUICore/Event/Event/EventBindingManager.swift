@@ -48,21 +48,121 @@ final public class EventBindingManager {
 
     package func rebindEvent(
         _ identifier: EventID,
-        to: ResponderNode?
+        to newResponder: ResponderNode?
     ) -> (from: EventBinding?, to: EventBinding?)? {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Minimal: drop/replace the stored binding for this id. Not on the basic
+        // tap path (used by gestures that re-target mid-sequence); kept safe + trap-free.
+        let from = eventBindings[identifier]
+        guard let newResponder else {
+            eventBindings[identifier] = nil
+            return (from, nil)
+        }
+        let to = EventBinding(responder: newResponder)
+        eventBindings[identifier] = to
+        return (from, to)
     }
 
     package func willRemoveResponder(_ from: ResponderNode) {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Drop any bindings pointing at a responder being torn down so we never
+        // forward into a dead responder. Safe no-op if none match.
+        eventBindings = eventBindings.filter { $0.value.responder !== from }
     }
 
     package func setInheritedPhase(_ phase: _GestureInputs.InheritedPhase) {
-        _openSwiftUIUnimplementedFailure()
+        host?.setInheritedPhase(phase)
     }
 
     private func sendDownstream(_ events: [EventID: any EventType]) -> Set<EventID> {
-        _openSwiftUIUnimplementedFailure()
+        _gtrace("EBM.sendDownstream enter n=\(events.count)")
+        guard let rootResponder, let host else {
+            _gtrace("EBM.sendDownstream no-root-or-host")
+            return []
+        }
+        isActive = true
+
+        // 1. Bind each event to a responder (reusing an existing binding for its id),
+        //    stamp the binding onto the event, and bucket by bound responder.
+        var handled: Set<EventID> = []
+        var boundByResponder: [ObjectIdentifier: (node: ResponderNode, events: [EventID: any EventType])] = [:]
+        var time: Time = .zero
+
+        for (id, rawEvent) in events {
+            let binding: EventBinding
+            if let existing = eventBindings[id] {
+                binding = existing
+            } else if let responder = bindResponder(for: rawEvent, root: rootResponder) {
+                binding = EventBinding(responder: responder)
+                eventBindings[id] = binding
+                delegate?.didBind(to: binding, id: id)
+            } else {
+                continue
+            }
+
+            var event = rawEvent
+            event.binding = binding
+            if time < event.timestamp {
+                time = event.timestamp
+            }
+
+            let key = ObjectIdentifier(binding.responder)
+            if var bucket = boundByResponder[key] {
+                bucket.events[id] = event
+                boundByResponder[key] = bucket
+            } else {
+                boundByResponder[key] = (binding.responder, [id: event])
+            }
+            handled.insert(id)
+        }
+
+        guard !boundByResponder.isEmpty else {
+            return []
+        }
+
+        // 2. Forward each bucket to the host, which routes to the responder's gesture
+        //    graph, then report the resulting phase back to the delegate (terminal →
+        //    the host resets the bindings for the next sequence).
+        for (_, bucket) in boundByResponder {
+            _gtrace("EBM.host.sendEvents pre")
+            let phase = host.sendEvents(bucket.events, rootNode: bucket.node, at: time)
+            _gtrace("EBM.host.sendEvents post")
+            delegate?.didUpdate(phase: phase, in: self)
+        }
+        return handled
+    }
+
+    /// [wandr] Resolve an event to the responder that should receive it.
+    ///
+    /// First tries the structural `bindEvent` traversal. With `GestureContainerFeature`
+    /// disabled (no geometric hit-testing leaf responders exist yet), that returns nil
+    /// for a gesture whose content produced no responders, so we fall back to a
+    /// structural search for the first valid gesture responder. This delivers a single
+    /// `.onTapGesture` regardless of the precise hit location — correct enough for the
+    /// first milestone; true geometry is a follow-up (see HitTestBindingModifier).
+    private func bindResponder(for event: any EventType, root: ResponderNode) -> ResponderNode? {
+        _gtrace("EBM.bindResponder enter")
+        if let bound = root.bindEvent(event) {
+            _gtrace("EBM.bindResponder structural-bound")
+            return bound
+        }
+        _gtrace("EBM.bindResponder visit-fallback")
+        guard HitTestableEvent(event) != nil else {
+            return nil
+        }
+        var found: ResponderNode?
+        root.visit { node in
+            if let gesture = node as? any AnyGestureResponder {
+                // Materialize the gesture container; a GestureResponder only reports
+                // `isValid == true` once its container exists (it is created lazily, and
+                // nothing on the structural path would otherwise trigger it).
+                _ = gesture.gestureContainer
+                if gesture.isValid {
+                    found = node
+                    return .cancel
+                }
+            }
+            return .next
+        }
+        return found
     }
 
     @discardableResult
@@ -76,23 +176,43 @@ final public class EventBindingManager {
     }
 
     package func send<E>(_ event: E, id: Int) where E: EventType {
-        _openSwiftUIUnimplementedFailure()
+        send([EventID(type: E.self, serial: id): event])
     }
 
-    package var rootResponder: ResponderNode? { _openSwiftUIUnimplementedFailure() }
+    package var rootResponder: ResponderNode? {
+        host?.responderNode
+    }
 
-    package var focusedResponder: ResponderNode? { _openSwiftUIUnimplementedFailure() }
+    package var focusedResponder: ResponderNode? {
+        // [wandr] No keyboard/focus responder routing yet. Returning nil directly (rather
+        // than delegating to the host, which would recurse back here) keeps the tap path
+        // simple and avoids a focus subsystem we have not built.
+        nil
+    }
 
     package func reset(resetForwardedEventDispatchers: Bool = false) {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Drop bindings so the next pointer-down rebinds fresh. We intentionally
+        // do NOT tear down gesture subgraphs here (Subgraph.forEach swiftcall mislowering
+        // on wasm32-wasip1) — GestureGraph.sendEvents bumps its reset seed in-graph to
+        // re-arm the gesture for the next sequence.
+        eventBindings.removeAll()
+        if resetForwardedEventDispatchers {
+            for key in forwardedEventDispatchers.keys {
+                forwardedEventDispatchers[key]?.reset()
+            }
+        }
+        isActive = false
     }
 
     package func isActive<E>(for eventType: E.Type) -> Bool where E: EventType {
-        _openSwiftUIUnimplementedFailure()
+        guard isActive else {
+            return false
+        }
+        return eventBindings.contains { ObjectIdentifier($0.key.type) == ObjectIdentifier(E.self) }
     }
 
     package func binds<E>(_ event: E) -> Bool where E: EventType {
-        _openSwiftUIUnimplementedFailure()
+        rootResponder?.bindEvent(event) != nil
     }
 }
 

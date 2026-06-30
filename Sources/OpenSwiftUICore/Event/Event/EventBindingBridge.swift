@@ -34,18 +34,22 @@ open class EventBindingBridge {
         _ events: [EventID: any EventType],
         source: any EventBindingSource
     ) -> Set<EventID> {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Minimal safe default: forward to the binding manager. The wandr subclass
+        // overrides this; the base body is kept trap-free in case it is ever used directly.
+        eventBindingManager?.send(events) ?? []
     }
 
     open func reset(
         eventSource: any EventBindingSource,
         resetForwardedEventDispatchers: Bool = false
     ) {
-        _openSwiftUIUnimplementedFailure()
+        resetEvent()
+        eventBindingManager?.reset(resetForwardedEventDispatchers: resetForwardedEventDispatchers)
     }
 
     private func resetEvent() {
-        _openSwiftUIUnimplementedFailure()
+        // [wandr] Drop per-source tracking. Safe no-op when empty.
+        trackedEvents.removeAll()
     }
 
     open func setInheritedPhase(_ phase: _GestureInputs.InheritedPhase) {
