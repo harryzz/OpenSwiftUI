@@ -21,7 +21,14 @@ extension LayoutGesture {
         gesture: _GraphValue<Self>,
         inputs: _GestureInputs
     ) -> _GestureOutputs<Void> {
-        _openSwiftUIUnimplementedFailure()
+        // A LayoutGesture (e.g. DefaultLayoutGesture, the base responder's gesture for a plain
+        // layout subview) carries no gesture-phase behavior — Value == () and updateEventBindings
+        // is empty; its real work is responder/event routing, not phase computation. So the
+        // faithful output is the inputs' default gesture outputs (a DefaultRule phase + the
+        // indirect preference outputs). The caller (DefaultLayoutViewResponder.makeGesture) then
+        // overrides its own default phase with this. The richer event-binding machinery
+        // (LayoutGestureChildProxy / updateEventBindings) stays WIP upstream.
+        inputs.makeDefaultOutputs()
     }
 
     package func updateEventBindings(
