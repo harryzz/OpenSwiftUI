@@ -6,6 +6,7 @@
 //  Status: Complete
 //  ID: 9DF46B4E935FF03A55FF3DDFB0B1FF2B (SwiftUICore)
 
+package import Foundation
 package import OpenAttributeGraphShims
 
 // MARK: - GestureViewModifier
@@ -68,6 +69,8 @@ extension GestureViewModifier {
             let filter = GestureFilter(
                 children: outputs.viewResponders(),
                 modifier: modifier.value,
+                position: inputs.animatedPosition(),
+                size: inputs.animatedCGSize(),
                 inputs: inputs,
                 viewSubgraph: .current!
             )
@@ -293,6 +296,11 @@ private class GestureResponder<Modifier>: DefaultLayoutViewResponder, AnyGesture
 
     var _gestureContainer: AnyObject?
 
+    // [wandr] Approach A: this gesture's own (global) layout frame, kept in sync by GestureFilter.
+    // A gesture is hit-testable via its own frame regardless of its content's view type (shape,
+    // stack, text) — no per-view-type leaf responders needed.
+    var hitFrame: CGRect = .zero
+
     init(modifier: Attribute<Modifier>, inputs: _ViewInputs) {
         self.modifier = modifier
         super.init(inputs: inputs)
@@ -351,16 +359,20 @@ private class GestureResponder<Modifier>: DefaultLayoutViewResponder, AnyGesture
         cacheKey: UInt32?,
         options: ViewResponder.ContainsPointsOptions
     ) -> ViewResponder.ContainsPointsResult {
-        var result = super.containsGlobalPoints(points, cacheKey: cacheKey, options: options)
-        if options.contains(.useZDistanceAsPriority) {
-            result.priority = ViewResponder.gestureContainmentPriority
+        let result = super.containsGlobalPoints(points, cacheKey: cacheKey, options: options)
+        // [wandr] Approach A: hit-test against this gesture's OWN layout frame (covers any content
+        // view type), unioned with any nested gesture descendants' masks.
+        var mask = result.mask
+        for index in points.indices where hitFrame.contains(points[index]) {
+            mask[index] = true
         }
-        // [wandr] super already unioned our content leaves' masks (so we know whether the hit is
-        // inside our content), but the event must bind to THIS gesture — ViewGraph.sendEvents
-        // requires an AnyGestureResponder. Keep only nested gesture responders as hit-test
-        // descendants so `hitTest` stops here for plain content leaves and returns the gesture.
-        result.children = result.children.filter { $0 is any AnyGestureResponder }
-        return result
+        // Bind to THIS gesture (ViewGraph.sendEvents needs an AnyGestureResponder), not content
+        // leaves: keep only nested gesture responders so hitTest stops here and returns the gesture.
+        return ContainsPointsResult(
+            mask: mask,
+            priority: options.contains(.useZDistanceAsPriority) ? ViewResponder.gestureContainmentPriority : result.priority,
+            children: result.children.filter { $0 is any AnyGestureResponder }
+        )
     }
 
     override func bindEvent(_ event: any EventType) -> ResponderNode? {
@@ -487,6 +499,12 @@ private struct GestureFilter<Modifier>: StatefulRule where Modifier: GestureView
 
     @Attribute var modifier: Modifier
 
+    // [wandr] The modified view's global layout frame — keeps GestureResponder.hitFrame in sync so
+    // the gesture is hit-testable via its own frame (Approach A).
+    @Attribute var position: ViewOrigin
+
+    @Attribute var size: CGSize
+
     var inputs: _ViewInputs
 
     var viewSubgraph: Subgraph
@@ -506,6 +524,7 @@ private struct GestureFilter<Modifier>: StatefulRule where Modifier: GestureView
         if childrenChanged {
             responder.children = children
         }
+        responder.hitFrame = CGRect(origin: position, size: size)
         if !hasValue {
             value = [self.responder]
         }
