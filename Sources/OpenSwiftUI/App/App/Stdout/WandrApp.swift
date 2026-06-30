@@ -29,6 +29,7 @@ import OpenSwiftUICore
 nonisolated(unsafe) private var _wandrHostKeepAlive: AnyObject?
 nonisolated(unsafe) private var _wandrRedraw: (() -> Void)?
 nonisolated(unsafe) private var _wandrRender: (() -> Void)?
+nonisolated(unsafe) private var _wandrRenderFrame: ((Double) -> Bool)?
 
 // [wandr debug] flush-safe stderr trace to locate the wasm render-drive hang (survives timeout-kill).
 #if os(WASI)
@@ -81,6 +82,11 @@ public func renderWandrAppOnce(
         // re-evaluated body that creates new attributes has a current subgraph — otherwise
         // Attribute.init(value:) hits "attempting to create attribute with no subgraph".
         _wandrRender = { Update.dispatchImmediately(reason: nil) { host.renderOnce() } }
+        _wandrRenderFrame = { interval in
+            var pending = false
+            Update.dispatchImmediately(reason: nil) { pending = host.renderFrame(interval: interval) }
+            return pending
+        }
         _wandrTrace("renderOnce START")
         host.renderOnce()
         _wandrTrace("renderOnce DONE")
@@ -110,5 +116,15 @@ public func wandrApplyChange(_ body: () -> Void) {
 @_spi(WandrRenderer)
 public func wandrRender() {
     _wandrRender?()
+}
+
+/// Drive ONE animation frame: advance the animation clock by `interval` seconds, re-evaluate
+/// invalidated bodies, interpolate active value animations, and render. Returns `true` while an
+/// animation is still in flight (keep calling each frame at a fast cadence); `false` once settled
+/// (the guest can drop back to idle pacing). This is what makes `.animation(_:value:)` springs
+/// interpolate instead of snapping — `wandrRender()`/`renderOnce()` freeze the clock at interval 0.
+@_spi(WandrRenderer)
+public func wandrRenderFrame(_ interval: Double) -> Bool {
+    _wandrRenderFrame?(interval) ?? false
 }
 #endif

@@ -57,6 +57,19 @@ final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRende
         }
     }
 
+    /// [wandr] Drive ONE animation frame: advance the animation clock by `interval` seconds,
+    /// re-evaluate invalidated bodies, interpolate active value animations (`.animation(_:value:)`),
+    /// and render. Unlike `renderOnce` (interval `.zero` = frozen clock → animations snap to target),
+    /// this is what makes springs actually interpolate. Returns `true` while an animation is still in
+    /// flight (the graph scheduled a finite `nextUpdate`), so the guest keeps driving frames fast;
+    /// `false` once everything settles and the guest can drop back to idle pacing.
+    package func renderFrame(interval: Double) -> Bool {
+        viewGraph.graph.withoutSubgraphInvalidation {
+            render(interval: interval, targetTimestamp: nil)
+        }
+        return viewGraph.nextUpdate.views.time.seconds.isFinite
+    }
+
     /// Re-walk the current (already-computed) display list into `options.sink`, without
     /// re-running the graph. The guest calls this every frame (after pointing the sink's
     /// CGContext at the new back-buffer) so a static scene repaints under double-buffering.
