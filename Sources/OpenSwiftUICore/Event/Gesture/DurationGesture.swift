@@ -86,7 +86,12 @@ private struct DurationPhase<BodyValue>: ResettableGestureRule {
             elapsed = time - start
         } else {
             let childPhase = childPhase
-            if childPhase.isActive || modifier.trackFromEventStart {
+            // A gesture that reaches a terminal (.ended) phase without ever having been .active
+            // — i.e. it began and ended with no intervening active frame (a zero-duration tap on
+            // our input clock) — has elapsed == 0, not nil. Start timing now so the .ended branch's
+            // `elapsed!` is satisfied, mirroring the existing .isActive / trackFromEventStart path.
+            // Without this, an active-less .ended force-unwraps nil and traps.
+            if childPhase.isActive || childPhase.isEnded || modifier.trackFromEventStart {
                 start = time
                 elapsed = .zero
             } else {
