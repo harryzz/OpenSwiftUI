@@ -42,6 +42,9 @@ final package class GestureGraph: GraphHost, EventGraphHost, CustomStringConvert
     @OptionalAttribute private var gestureDependencyAttr: GestureDependency?
     @Attribute private var gesturePreferenceKeys: PreferenceKeys
     var nextUpdateTime: Time
+    // [wandr] Set when a sequence ended terminal; consumed (reset seed bumped) at the START of the
+    // next sequence so re-arming happens in the same transaction as the new sequence's first event.
+    var lastPhaseWasTerminal: Bool = false
 
     init(rootResponder: AnyGestureResponder) {
         self.rootResponder = rootResponder
@@ -155,6 +158,16 @@ final package class GestureGraph: GraphHost, EventGraphHost, CustomStringConvert
                 _gtrace("GG.sendEvents not-instantiated")
                 return .failed
             }
+            // [wandr] Re-arm for a new sequence at its START (not after the previous terminal):
+            // if the previous sequence ended terminal, bump the reset seed NOW — before processing
+            // this sequence's events in the SAME transaction — so the gesture rules reset and the
+            // fresh down/up fires cleanly. Bumping AFTER the terminal raced with the next down
+            // arriving before the bump propagated, causing intermittent first-attempt misses on
+            // device (NO subgraph teardown — the bump is the only re-arm).
+            if lastPhaseWasTerminal {
+                gestureResetSeed &+= 1
+                lastPhaseWasTerminal = false
+            }
             gestureTime = time
             gestureEvents = events
             // Drive a transactional update so the (transactional) CallbacksPhase runs and
@@ -163,11 +176,8 @@ final package class GestureGraph: GraphHost, EventGraphHost, CustomStringConvert
             runTransaction()
             _gtrace("GG.sendEvents runTransaction-done")
             let phase = rootPhase ?? .failed
-            // [wandr] Re-arm for the next gesture sequence in-graph (NO subgraph teardown):
-            // bumping the reset seed makes EventListener clear its tracking id on the next
-            // send, so a fresh down/up after this terminal phase binds and fires cleanly.
             if phase.isTerminal {
-                gestureResetSeed &+= 1
+                lastPhaseWasTerminal = true
             }
             return phase
         }
