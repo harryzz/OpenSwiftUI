@@ -619,7 +619,6 @@ extension ViewGraph {
         // responder we ultimately route to is the persistent child (a GestureResponder),
         // so this transient root is cheap and safe.
         instantiateIfNeeded()
-        _gtrace("VG.responderNode build n=\(rootResponders?.count ?? -1)")
         return globalSubgraph.apply {
             let root = MultiViewResponder()
             root.children = rootResponders ?? []
@@ -640,18 +639,13 @@ extension ViewGraph {
         // hands us the responder it bound the event to; for a `.onTapGesture` /
         // `DragGesture` that is an `AnyGestureResponder`, which owns the per-gesture
         // GestureGraph that consumes events and drives the gesture's callbacks.
-        _gtrace("VG.sendEvents enter")
         guard let responder = rootNode as? any AnyGestureResponder else {
-            _gtrace("VG.sendEvents not-AnyGestureResponder")
             return .failed
         }
-        _gtrace("VG.sendEvents gestureContainer-pre")
         _ = responder.gestureContainer
         guard responder.isValid else {
-            _gtrace("VG.sendEvents not-valid")
             return .failed
         }
-        _gtrace("VG.sendEvents gestureGraph.sendEvents-pre")
         return responder.gestureGraph.sendEvents(events, rootNode: rootNode, at: time)
     }
 

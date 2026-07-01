@@ -73,9 +73,7 @@ final public class EventBindingManager {
     }
 
     private func sendDownstream(_ events: [EventID: any EventType]) -> Set<EventID> {
-        _gtrace("EBM.sendDownstream enter n=\(events.count)")
         guard let rootResponder, let host else {
-            _gtrace("EBM.sendDownstream no-root-or-host")
             return []
         }
         isActive = true
@@ -122,9 +120,7 @@ final public class EventBindingManager {
         //    graph, then report the resulting phase back to the delegate (terminal →
         //    the host resets the bindings for the next sequence).
         for (_, bucket) in boundByResponder {
-            _gtrace("EBM.host.sendEvents pre")
             let phase = host.sendEvents(bucket.events, rootNode: bucket.node, at: time)
-            _gtrace("EBM.host.sendEvents post")
             delegate?.didUpdate(phase: phase, in: self)
         }
         return handled
@@ -139,9 +135,7 @@ final public class EventBindingManager {
     /// `.onTapGesture` regardless of the precise hit location — correct enough for the
     /// first milestone; true geometry is a follow-up (see HitTestBindingModifier).
     private func bindResponder(for event: any EventType, root: ResponderNode) -> ResponderNode? {
-        _gtrace("EBM.bindResponder enter")
         if let bound = root.bindEvent(event) {
-            _gtrace("EBM.bindResponder structural-bound")
             return bound
         }
         // [wandr] With geometric hit-testing on, root.bindEvent already did a location-aware
@@ -149,10 +143,8 @@ final public class EventBindingManager {
         // back to "first valid gesture regardless of location" (that's the old location-blind
         // behavior). Only use the structural fallback when the geometric path is disabled.
         guard !GestureContainerFeature.isEnabled else {
-            _gtrace("EBM.bindResponder geometric-miss")
             return nil
         }
-        _gtrace("EBM.bindResponder visit-fallback")
         guard HitTestableEvent(event) != nil else {
             return nil
         }

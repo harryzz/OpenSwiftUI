@@ -500,14 +500,11 @@ extension GraphHost {
         repeat {
             let oldContinuations = continuations
             continuations = []
-            if !oldContinuations.isEmpty { _gtrace("FTU continuations n=\(oldContinuations.count)") }
             for continuation in oldContinuations {
                 continuation()
             }
             counter &+= 1
-            _gtrace("FTU subgraph.update-pre")
             subgraph.update(flags: .transactional)
-            _gtrace("FTU subgraph.update-post")
             postUpdate(!continuations.isEmpty)
         } while counter != 8 && !continuations.isEmpty
         inTransaction = false

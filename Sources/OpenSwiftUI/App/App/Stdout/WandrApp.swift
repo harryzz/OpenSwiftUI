@@ -34,13 +34,6 @@ nonisolated(unsafe) private var _wandrRenderFrame: ((Double) -> Bool)?
 // through the host's EventBindingManager so `.onTapGesture` / DragGesture callbacks fire.
 nonisolated(unsafe) private var _wandrSendEvent: ((Int, Double, Double, Int) -> Void)?
 
-// [wandr debug] flush-safe stderr trace to locate the wasm render-drive hang (survives timeout-kill).
-#if os(WASI)
-@inline(never) private func _wandrTrace(_ s: String) { fputs("[WANDR] \(s)\n", stderr); fflush(stderr) }
-#else
-@inline(never) private func _wandrTrace(_ s: String) {}
-#endif
-
 /// Build `app`'s graph + first scene and render it once through the wandr renderer
 /// into `options.sink`. The host is retained for the process lifetime (a guest keeps
 /// one host across frames; this also dodges the Subgraph.forEach teardown wall).
@@ -58,19 +51,13 @@ public func renderWandrAppOnce(
         supportsViewTransitions: false,
         usesHostShapedText: true
     )
-    _wandrTrace("renderWandrAppOnce: enter")
     Update.dispatchImmediately(reason: nil) {
-        _wandrTrace("dispatchImmediately: in")
         let graph = AppGraph(app: app)
-        _wandrTrace("AppGraph created")
         graph.instantiate()
-        _wandrTrace("instantiate DONE")
         AppGraph.shared = graph
         guard let item = graph.rootSceneList?.items.first else {
-            _wandrTrace("no root scene item")
             return
         }
-        _wandrTrace("rootScene ok")
         let rootView = item.value.view
             .frame(width: options.surface.width, height: options.surface.height)
         let host = WandrRendererHost(
@@ -78,7 +65,6 @@ public func renderWandrAppOnce(
             environment: item.environment,
             options: options
         )
-        _wandrTrace("host created")
         _wandrHostKeepAlive = host
         _wandrRedraw = { host.redraw() }
         // Re-render must run inside an update transaction (like the initial render below) so a
@@ -114,16 +100,11 @@ public func renderWandrAppOnce(
                 // EventID.init(_:subtype:) overload, which unsafeBitCasts an existential
                 // and corrupts ARC on wasm32-wasip1.
                 let id = EventID(type: MouseEvent.self, serial: serial)
-                _wandrTrace("SP send-pre phase=\(phase)")
                 host.eventBindingManager.send([id: event])
-                _wandrTrace("SP send-post phase=\(phase)")
             }
         }
-        _wandrTrace("renderOnce START")
         host.renderOnce()
-        _wandrTrace("renderOnce DONE")
     }
-    _wandrTrace("renderWandrAppOnce: exit")
 }
 
 /// Re-walk the current display list into the sink passed to `renderWandrAppOnce`.
