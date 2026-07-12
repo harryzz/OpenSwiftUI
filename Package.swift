@@ -661,7 +661,9 @@ let openSwiftUITestsSupportTarget = Target.target(
     dependencies: (compatibilityTestCondition ? [] : ["OpenSwiftUI"]),
     cSettings: sharedCSettings,
     cxxSettings: sharedCxxSettings,
-    swiftSettings: sharedSwiftSettings
+    swiftSettings: sharedSwiftSettings + (compatibilityTestCondition ? [
+        .unsafeFlags(["-I", "\(Context.packageDirectory)/Example/Modules/Platform/cocoa"]),
+    ] : [])
 )
 
 let openSwiftUIExtensionTarget = Target.target(
@@ -695,7 +697,9 @@ let openSwiftUICompatibilityTestTarget = Target.testTarget(
     exclude: ["README.md"],
     cSettings: sharedCSettings,
     cxxSettings: sharedCxxSettings,
-    swiftSettings: sharedSwiftSettings
+    swiftSettings: sharedSwiftSettings + (compatibilityTestCondition ? [
+        .unsafeFlags(["-I", "\(Context.packageDirectory)/Example/Modules/Platform/cocoa"]),
+    ] : [])
 )
 
 // MARK: - OpenSwiftUIBridge Target
@@ -951,6 +955,30 @@ if swiftCryptoCondition {
 #if TUIST
 import struct ProjectDescription.PackageSettings
 import enum ProjectDescription.Product
+import enum ProjectDescription.SettingValue
+import typealias ProjectDescription.SettingsDictionary
+
+let openSwiftUIBuildAGBackend: String
+if let configuredAGBackend = envStringValue("AG_BACKEND_NAME") {
+    openSwiftUIBuildAGBackend = configuredAGBackend
+} else if computeCondition {
+    openSwiftUIBuildAGBackend = "Compute"
+} else if danceUIGraphCondition {
+    openSwiftUIBuildAGBackend = "DanceUIGraph"
+} else if attributeGraphCondition {
+    openSwiftUIBuildAGBackend = "AttributeGraph"
+} else {
+    openSwiftUIBuildAGBackend = "OpenAttributeGraph"
+}
+let openSwiftUIBuildRendererBackend = envStringValue("RENDERER_BACKEND_NAME") ?? (swiftUIRenderCondition ? "SwiftUI" : "OpenSwiftUI")
+let openSwiftUIBuildLibraryType = configuredLibraryType ?? "automatic"
+let openSwiftUITargetSettings: SettingsDictionary = [
+    "INFOPLIST_FILE": .string("Configurations/OpenSwiftUI-Info.plist"),
+    "OPENSWIFTUI_BUILD_AG_BACKEND": .string(openSwiftUIBuildAGBackend),
+    "OPENSWIFTUI_BUILD_RENDERER_BACKEND": .string(openSwiftUIBuildRendererBackend),
+    "OPENSWIFTUI_BUILD_LIBRARY_TYPE": .string(openSwiftUIBuildLibraryType),
+    "OPENSWIFTUI_BUILD_USES_LOCAL_DEPENDENCIES": .string(useLocalDeps ? "YES" : "NO"),
+]
 
 let packageSettings = PackageSettings(
     productTypes: [
@@ -968,6 +996,9 @@ let packageSettings = PackageSettings(
         "OpenRenderBoxShims": ProjectDescription.Product.staticFramework,
         "SymbolLocator": ProjectDescription.Product.staticFramework,
     ],
-    baseProductType: ProjectDescription.Product.staticFramework
+    baseProductType: ProjectDescription.Product.staticFramework,
+    targetSettings: [
+        "OpenSwiftUI": .settings(base: openSwiftUITargetSettings),
+    ]
 )
 #endif

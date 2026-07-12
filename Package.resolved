@@ -1,5 +1,5 @@
 {
-  "originHash" : "9646970ccc24a2bec27adf297824b75c0f9fcd7974245ade131018c97dfae28b",
+  "originHash" : "13632f122dbb85cdf5116b25776b9d61aa9318fd2f2f321e8a38c4b885ec58c4",
   "pins" : [
     {
       "identity" : "darwinprivateframeworks",
@@ -7,7 +7,7 @@
       "location" : "https://github.com/OpenSwiftUIProject/DarwinPrivateFrameworks.git",
       "state" : {
         "branch" : "main",
-        "revision" : "b0c3d94ff6b7200754ad2adf948fd3c6ebaef956"
+        "revision" : "d93839821ebebdab22081fbc0f3d0b8cb0e30b2f"
       }
     },
     {
@@ -16,7 +16,7 @@
       "location" : "https://github.com/OpenSwiftUIProject/OpenAttributeGraph",
       "state" : {
         "branch" : "main",
-        "revision" : "f20328ed3fb97159624c171e204dba29f942a1eb"
+        "revision" : "40226e38bba14a6424b01bed46aa2587a293dfb1"
       }
     },
     {
@@ -43,7 +43,7 @@
       "location" : "https://github.com/OpenSwiftUIProject/OpenRenderBox",
       "state" : {
         "branch" : "main",
-        "revision" : "38d099fb3144cc4b268de962658cf810a6144896"
+        "revision" : "d6db14f180068c6813a936088e767c2ca99c308d"
       }
     },
     {
