@@ -36,43 +36,11 @@ public struct _OffsetEffect: GeometryEffect, Equatable {
         set { offset.animatableData = newValue }
     }
 
-    nonisolated public static func _makeView(
-        modifier: _GraphValue<_OffsetEffect>,
-        inputs: _ViewInputs,
-        body: @escaping (_Graph, _ViewInputs) -> _ViewOutputs
-    ) -> _ViewOutputs {
-        var inputs = inputs
-        inputs.position = Attribute(
-            OffsetPosition(
-                effect: modifier.value,
-                position: inputs.position,
-                layoutDirection: inputs.layoutDirection
-            )
-        )
-        return body(_Graph(), inputs)
-    }
-}
-
-// MARK: - OffsetPosition
-
-private struct OffsetPosition: Rule, AsyncAttribute {
-    @Attribute var effect: _OffsetEffect
-    @Attribute var position: CGPoint
-    @Attribute var layoutDirection: LayoutDirection
-
-    var value: CGPoint {
-        position.resolved(in: layoutDirection) + effect.offset
-    }
-}
-
-extension CGPoint {
-    @inline(__always)
-    fileprivate func resolved(in layoutDirection: LayoutDirection) -> CGPoint {
-        switch layoutDirection {
-        case .leftToRight: CGPoint(x: x, y: y)
-        case .rightToLeft: CGPoint(x: -x, y: y)
-        }
-    }
+    // Use the generic GeometryEffect render-transform path (via effectValue) instead of a
+    // custom _makeView that rewrites inputs.position — `.offset` is a RENDER transform in
+    // SwiftUI (shifts drawn content, leaves layout untouched), and mutating inputs.position
+    // has no effect over a `.position()`/GeometryReader child that re-establishes its own
+    // coordinate space (e.g. a side panel hidden with `.center(...).offset(x: -width)`).
 }
 
 // MARK: - View + offset

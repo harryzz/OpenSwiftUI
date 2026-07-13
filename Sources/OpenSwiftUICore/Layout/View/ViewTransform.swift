@@ -326,6 +326,16 @@ public struct ViewTransform: Equatable, CustomStringConvertible {
 
     package func convert(_ conversion: ViewTransform.Conversion, point: CGPoint) -> CGPoint {
         guard !isEmpty else { return point }
+        // A view's `.local` coordinate space is its own bounds — it must NOT include ancestor
+        // render transforms (e.g. `.offset`, which shifts `.global` but leaves `.local`
+        // unchanged). Converting local↔local is therefore the identity; without this, a
+        // GeometryProxy inside an offset view reports a distorted `.local` frame (its
+        // `.frame(in: .local).midX` picks up the offset), which breaks e.g. a `.center(in:.local)`
+        // that a view uses to place itself before being offset off-screen.
+        switch conversion {
+        case .localToSpace(.local), .spaceToLocal(.local): return point
+        default: break
+        }
         let inverted = conversionIsInverted(conversion)
         var p = point
         forEach(inverted: inverted) { item, _ in
