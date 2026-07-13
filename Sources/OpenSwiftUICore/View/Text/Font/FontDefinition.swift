@@ -276,7 +276,12 @@ public enum DefaultFontDefinition: FontDefinition {
             legibilityWeight: context.legibilityWeight
         )
         #else
-        _openSwiftUIUnimplementedFailure()
+        // wasm: carry the resolved point size + weight on the placeholder descriptor
+        // (see CoreText+Private.swift). Design is not yet plumbed to the draw sink.
+        return CTFontDescriptor(
+            pointSize: textStyle.wandrPointSize(at: DynamicTypeSize(context.sizeCategory)),
+            weightValue: weight?.value ?? 0
+        )
         #endif
     }
 
@@ -296,7 +301,8 @@ public enum DefaultFontDefinition: FontDefinition {
             legibilityWeight: context.legibilityWeight
         )
         #else
-        _openSwiftUIUnimplementedFailure()
+        // wasm: carry the requested point size + weight on the placeholder descriptor.
+        return CTFontDescriptor(pointSize: size, weightValue: weight?.value ?? 0)
         #endif
     }
 }

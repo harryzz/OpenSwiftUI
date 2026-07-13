@@ -717,6 +717,18 @@ extension Font {
             modifier.modify(descriptor: &descriptor, in: context)
             return descriptor
         }
+
+        // Resolve traits through `modify(traits:)` rather than the default
+        // `.init(resolve(...))`. The latter forces `modify(descriptor:)`, which several
+        // modifiers (e.g. WeightModifier) leave unimplemented — so a `.weight()` on a font
+        // trapped when only its metrics were needed. `modify(traits:)` is the trait-path
+        // counterpart every FontModifier already provides (weight/width set the value;
+        // face-only modifiers no-op), so metrics resolve without touching a descriptor.
+        func resolveTraits(in context: Font.Context) -> Font.ResolvedTraits {
+            var traits = base.resolveTraits(in: context)
+            modifier.modify(traits: &traits)
+            return traits
+        }
     }
 
     private struct StaticModifierProvider<M>: FontProvider where M: StaticFontModifier {
@@ -726,6 +738,12 @@ extension Font {
             var descriptor = base.resolve(in: context)
             M.modify(descriptor: &descriptor, in: context)
             return descriptor
+        }
+
+        func resolveTraits(in context: Font.Context) -> Font.ResolvedTraits {
+            var traits = base.resolveTraits(in: context)
+            M.modify(traits: &traits)
+            return traits
         }
     }
 }

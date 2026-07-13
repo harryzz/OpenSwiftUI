@@ -196,8 +196,28 @@ let kCTFontWidthTrait: CGFloat
 
 public import Foundation
 
-// Placeholder for CoreText when not available.
-public class CTFontDescriptor: NSObject {}
+// Placeholder for CoreText when not available (wasm/Linux). CoreText's CTFontDescriptor is
+// opaque and its accessors (CTFontDescriptorCopyAttribute/GetWeight/…) don't exist here, so
+// instead of poking a real descriptor the wandr build carries the resolved font traits
+// (point size + weight) directly on this class. That is all OpenSwiftUI reads back out via
+// Font.ResolvedTraits, and it is enough to drive text layout — on wandr the host rasterises
+// glyphs by size. Font design (e.g. .monospaced) is intentionally NOT carried yet: it does
+// not reach the draw sink (which takes only a size), so mapping a design to a distinct face
+// is deferred to the glyph-drawing path.
+public class CTFontDescriptor: NSObject {
+    package let pointSize: CGFloat
+    package let weightValue: CGFloat
+    package init(pointSize: CGFloat, weightValue: CGFloat) {
+        self.pointSize = pointSize
+        self.weightValue = weightValue
+        super.init()
+    }
+    package override init() {
+        self.pointSize = 0
+        self.weightValue = 0
+        super.init()
+    }
+}
 
 public class CTFont: NSObject {}
 

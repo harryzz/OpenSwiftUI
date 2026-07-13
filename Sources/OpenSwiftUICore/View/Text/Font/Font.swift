@@ -66,7 +66,10 @@ public struct Font: Hashable, Sendable {
             self.weight = CTFontDescriptorGetWeight(descriptor)
             self.width = nil
             #else
-            _openSwiftUIPlatformUnimplementedFailure()
+            // wasm: the placeholder descriptor carries the traits directly.
+            self.pointSize = descriptor.pointSize
+            self.weight = descriptor.weightValue
+            self.width = nil
             #endif
         }
 
@@ -88,7 +91,10 @@ public struct Font: Hashable, Sendable {
             self.weight = weight?.value ?? w
             self.width = nil
             #else
-            _openSwiftUIPlatformUnimplementedFailure()
+            // wasm: derive the text-style size from the wandr metrics table.
+            self.pointSize = textStyle.wandrPointSize(at: dynamicTypeSize)
+            self.weight = weight?.value ?? 0
+            self.width = nil
             #endif
         }
 
