@@ -244,9 +244,14 @@ extension Metadata {
 
     // TODO: Optimize this implementation
     package func genericType(at index: Int) -> any Any.Type {
-        UnsafeRawPointer(rawValue)
-            .advanced(by: index &* 8)
-            .advanced(by: 16)
+        // The generic-argument vector of a value-type metadata follows its two
+        // pointer-sized header words (Kind + nominal Descriptor), and each argument
+        // is one metadata pointer. Derive the offsets from the actual pointer size so
+        // this is correct on both 64-bit (8) and wasm32 (4) — the previous hardcoded
+        // 16/8 read past the header into garbage on wasm32.
+        let ptrSize = MemoryLayout<UnsafeRawPointer>.stride
+        return UnsafeRawPointer(rawValue)
+            .advanced(by: (index &+ 2) &* ptrSize)
             .assumingMemoryBound(to: Any.Type.self)
             .pointee
     }

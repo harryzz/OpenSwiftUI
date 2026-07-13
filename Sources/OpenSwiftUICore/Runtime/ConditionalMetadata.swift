@@ -76,16 +76,20 @@ package struct ConditionalTypeDescriptor<P> where P: ConditionalProtocolDescript
         if descriptor == conditionalTypeDescriptor {
             let falseDescriptor = Self.descriptor(type: metadata.genericType(at: 1))
             let trueDescriptor = Self.descriptor(type: metadata.genericType(at: 0))
-            // FIXME: How to get _ConditionalContent.Storage type more easily
-            typealias Accessor =  @convention(c) (UInt, Metadata, Metadata) -> Metadata
-            let nominal = Metadata(_ConditionalContent<Void, Void>.Storage.self).nominalDescriptor!
-            let accessorRelativePointer = nominal.advanced(by: 12)
-            let accessor = unsafeBitCast(
-                accessorRelativePointer.advanced(by:Int(accessorRelativePointer.assumingMemoryBound(to: Int32.self).pointee)),
-                to: Accessor.self
-            )
-            let type = accessor(0, Metadata(metadata.genericType(at: 0)), Metadata(metadata.genericType(at: 1)))
-            storage = .either(type.type, f: falseDescriptor, t: trueDescriptor)
+            // The `.either` case needs `_ConditionalContent<T,U>.Storage`'s metadata (to read
+            // the enum tag in `project(at:)`). The upstream approach resolves the Storage
+            // nominal descriptor's metadata-access-function relative pointer and calls it via
+            // @convention(c). That is unsound on wasm: the relative pointer targets code, which
+            // lives in the function table — not linear memory — so the call lowers to a
+            // call_indirect with a bogus table index ("undefined element: out of bounds table
+            // access"). Instead, get the Storage type from `_ConditionalContent`'s sole stored
+            // field (`storage: Storage`) via runtime field reflection, which is arch-neutral.
+            var storageType: (any Any.Type)?
+            _ = metadata.forEachField(options: [.continueAfterUnknownField]) { _, _, fieldType in
+                storageType = fieldType
+                return false // stop after the first (and only) field
+            }
+            storage = .either(storageType!, f: falseDescriptor, t: trueDescriptor)
             count = falseDescriptor.count + trueDescriptor.count
         } else if descriptor == optionalTypeDescriptor {
             let wrappedDescriptor = Self.descriptor(type: metadata.genericType(at: 0))
