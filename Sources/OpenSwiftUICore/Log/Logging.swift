@@ -279,9 +279,31 @@ package func _openSwiftUIBaseClassAbstractMethod(_ function: String = #function,
     preconditionFailure("", file: file, line: line)
 }
 
+// MARK: - [wandr] one-shot "not implemented" reporter
+//
+// Every silently dropped / no-op'd / gated code path routes through `wandrWarnOnce` so the
+// FIRST time it's hit it prints `WANDR-UNIMPL: <what>` to stderr — then never again (deduped
+// by message, so no per-frame spam). Purpose: when a guest app looks wrong, the missing
+// feature announces itself in the log instead of needing a multi-hour investigation.
+#if canImport(WASILibc)
+import WASILibc
+#elseif canImport(Glibc)
+import Glibc
+#endif
+nonisolated(unsafe) var _wandrWarnedOnce: Set<String> = []
+@inline(never)
+package func wandrWarnOnce(_ message: @autoclosure () -> String) {
+    let m = message()
+    if _wandrWarnedOnce.insert(m).inserted {
+        fputs("WANDR-UNIMPL: \(m)\n", stderr)
+        fflush(stderr)
+    }
+}
+
 @_transparent
 package func _openSwiftUIEmptyStub(_ function: String = #function, file: StaticString = #fileID, line: UInt = #line) {
     // Intentionally empty - stub implementation
+    wandrWarnOnce("empty-stub \(function) [\(file):\(line)]")
 }
 
 // MARK: - OpenSwiftUI addition: dev addition Log API

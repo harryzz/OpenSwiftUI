@@ -15,6 +15,38 @@
 package import Foundation
 package import OpenCoreGraphicsShims
 
+// [wandr] name the DisplayList content/effect kinds this renderer does NOT yet handle, so the
+// `default` branches can announce exactly what was dropped (via wandrWarnOnce, once each).
+private func wandrContentName(_ c: DisplayList.Content.Value) -> String {
+    switch c {
+    case .backdrop: return "backdrop"; case .color: return "color"
+    case .chameleonColor: return "chameleonColor"; case .image: return "image (bitmap/SF-symbol)"
+    case .shape: return "shape"; case .shadow: return "shadow"
+    case .platformView: return "platformView"; case .platformLayer: return "platformLayer"
+    case .text: return "text"; case .flattened: return "flattened"
+    case .drawing: return "drawing (ORB/Canvas)"; case .view: return "view"
+    case .placeholder: return "placeholder"; @unknown default: return "unknown"
+    }
+}
+private func wandrEffectName(_ e: DisplayList.Effect) -> String {
+    switch e {
+    case .archive: return "archive"; case .platformGroup: return "platformGroup"
+    case .opacity: return "opacity"; case .blendMode: return "blendMode"
+    case .clip: return "clip"; case .mask: return "mask"
+    case let .transform(t):
+        switch t {
+        case .affine: return "transform.affine"; case .projection: return "transform.projection"
+        case .rotation: return "transform.rotation"; case .rotation3D: return "transform.rotation3D"
+        @unknown default: return "transform.?"
+        }
+    case .filter: return "filter (blur/shadow)"; case .contentTransition: return "contentTransition"
+    case .accessibility: return "accessibility"; case .state: return "state"
+    case .interpolatorRoot, .interpolatorLayer, .interpolatorAnimation: return "interpolator"
+    case .view: return "view"; case .platform: return "platform"
+    case .backdropGroup: return "backdropGroup"; @unknown default: return "unknown"
+    }
+}
+
 // MARK: - DisplayList + wandr sink rendering
 
 extension DisplayList {
@@ -97,7 +129,12 @@ private struct WandrSinkVisitor {
         case let .shape(_, paint, _):
             if let color = paint.wandrResolvedColor {
                 emitFill(frame: frame, color: color.multiplyingOpacity(by: opacity))
+            } else {
+                wandrWarnOnce("render: .shape paint is not a solid color (gradient/material/pattern) — dropped")
             }
+            // NOTE: shapes fill their bounding RECT only — the path is ignored, so rounded
+            // rects / circles / capsules / custom paths render as plain rectangles.
+            wandrWarnOnce("render: .shape rendered as bounding rect only (path ignored — corners/circles look square)")
         case let .flattened(list, offset, _):
             append(
                 list: list,
@@ -126,7 +163,7 @@ private struct WandrSinkVisitor {
             )
         default:
             // TODO: image, shadow, backdrop, view, platform* — grow WandrDrawSink.
-            break
+            wandrWarnOnce("render: dropped content .\(wandrContentName(content.value))")
         }
     }
 
@@ -143,6 +180,7 @@ private struct WandrSinkVisitor {
             append(list: list, transform: transform.concatenating(affine), opacity: opacity)
         default:
             // TODO: clip, mask, blendMode, filter — recurse unmodified for now.
+            wandrWarnOnce("render: dropped effect .\(wandrEffectName(effect)) (content still drawn, effect ignored)")
             append(list: list, transform: transform, opacity: opacity)
         }
     }
