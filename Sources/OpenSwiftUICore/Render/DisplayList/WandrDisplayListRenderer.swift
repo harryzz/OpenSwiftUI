@@ -259,6 +259,10 @@ private struct WandrSinkVisitor {
             append(list: list, transform: transform, opacity: opacity * alpha)
         case let .transform(.affine(affine)):
             append(list: list, transform: transform.concatenating(affine), opacity: opacity)
+        case let .transform(.rotation3D(data)):
+            wandrApplyProjection(data.transform, list: list, transform: transform, opacity: opacity)
+        case let .transform(.projection(projection)):
+            wandrApplyProjection(projection, list: list, transform: transform, opacity: opacity)
         case let .clip(clipPath, _, _):
             // The clip Path is local (origin .zero, from _ClipEffect.effectValue); the effect
             // item's frame origin is already folded into `transform` above, so mapping the path
@@ -276,6 +280,41 @@ private struct WandrSinkVisitor {
             wandrWarnOnce("render: dropped effect .\(wandrEffectName(effect)) (content still drawn, effect ignored)")
             append(list: list, transform: transform, opacity: opacity)
         }
+    }
+
+    // [wandr] Apply a ProjectionTransform (rotation3DEffect / non-affine projection). OpenSwiftUI
+    // already computes the matrix (`_Rotation3DEffect.Data.transform`), so no rotation math here.
+    // An AFFINE projection folds into the flatten transform. A PERSPECTIVE one needs the canvas
+    // CTM: push the accumulated affine + the projection, draw the subtree in LOCAL coords, restore.
+    // The ProjectionTransform → wasi:canvas (Skia) 3×3 map is a transpose (verified by the affine
+    // case: m00=m11, m01=m21, m02=m31; m10=m12, m11=m22, m12=m32; m20=m13, m21=m23, m22=m33).
+    // Sinks that can't do a perspective CTM draw flat (effect dropped, 2D position preserved).
+    private mutating func wandrApplyProjection(
+        _ pt: ProjectionTransform,
+        list: DisplayList,
+        transform: CGAffineTransform,
+        opacity: Float
+    ) {
+        if pt.isAffine {
+            let affine = CGAffineTransform(a: pt.m11, b: pt.m12, c: pt.m21, d: pt.m22, tx: pt.m31, ty: pt.m32)
+            append(list: list, transform: transform.concatenating(affine), opacity: opacity)
+            return
+        }
+        guard sink.wandrSupportsProjection else {
+            append(list: list, transform: transform, opacity: opacity)
+            return
+        }
+        sink.saveState()
+        // Skia `concat` post-multiplies ⇒ CTM = affine · projection, so a local point maps
+        // surface ← affine ← projection ← local.
+        sink.concat(m00: Double(transform.a), m01: Double(transform.c), m02: Double(transform.tx),
+                    m10: Double(transform.b), m11: Double(transform.d), m12: Double(transform.ty),
+                    m20: 0, m21: 0, m22: 1)
+        sink.concat(m00: Double(pt.m11), m01: Double(pt.m21), m02: Double(pt.m31),
+                    m10: Double(pt.m12), m11: Double(pt.m22), m12: Double(pt.m32),
+                    m20: Double(pt.m13), m21: Double(pt.m23), m22: Double(pt.m33))
+        append(list: list, transform: .identity, opacity: opacity)
+        sink.restoreState()
     }
 }
 

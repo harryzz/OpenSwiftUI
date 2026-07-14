@@ -214,6 +214,24 @@ public protocol WandrDrawSink: AnyObject {
     /// Pop the clip region pushed by the matching `pushClip` (restore the saved state).
     func popClip()
 
+    /// Whether the sink can apply a perspective CTM (`saveState`/`concat`/`restoreState`). A sink
+    /// that returns `false` makes the renderer draw projected subtrees *flat* (the 3D effect is
+    /// dropped but content stays at the correct 2D position). Default `false`.
+    var wandrSupportsProjection: Bool { get }
+
+    /// Save the current graphics state (CTM + clip). Balanced by `restoreState()`.
+    func saveState()
+    /// Restore the state saved by the matching `saveState()`.
+    func restoreState()
+    /// Concatenate a row-major 3×3 (affine rows + perspective row m20/m21/m22) onto the CTM.
+    /// Used to render `rotation3DEffect` / non-affine projections (tilted subtrees draw in local
+    /// coordinates under the concatenated matrix). Default no-op.
+    func concat(
+        m00: Double, m01: Double, m02: Double,
+        m10: Double, m11: Double, m12: Double,
+        m20: Double, m21: Double, m22: Double
+    )
+
     /// Called once at the end of a render pass.
     func endFrame()
 }
@@ -229,6 +247,14 @@ extension WandrDrawSink {
     }
     public func pushClip(svgPath: String) {}
     public func popClip() {}
+    public var wandrSupportsProjection: Bool { false }
+    public func saveState() {}
+    public func restoreState() {}
+    public func concat(
+        m00: Double, m01: Double, m02: Double,
+        m10: Double, m11: Double, m12: Double,
+        m20: Double, m21: Double, m22: Double
+    ) {}
 }
 /* OpenSwiftUI Addition End */
 
