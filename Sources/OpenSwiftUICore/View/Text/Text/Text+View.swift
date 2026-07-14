@@ -209,7 +209,11 @@ extension Text {
 // for layout. The conformance is harmless on renderers that don't use it (Apple's glyph path).
 extension StyledTextContentView: RendererLeafView, LeafViewLayout {
     private var wasmEstimatedSize: CGSize {
-        CGSize(
+        if wasmSymbolFill {
+            // Icon glyph: a ~square em box, so `scaledToFit` treats the symbol as square.
+            return CGSize(width: wasmFontSize, height: wasmFontSize)
+        }
+        return CGSize(
             width: CGFloat(wasmPlainString.count) * wasmFontSize * 0.6,
             height: wasmFontSize * 1.35
         )
@@ -218,7 +222,18 @@ extension StyledTextContentView: RendererLeafView, LeafViewLayout {
         .text(self, wasmEstimatedSize)
     }
     package func sizeThatFits(in proposedSize: _ProposedSize) -> CGSize {
-        wasmEstimatedSize
+        if wasmSymbolFill {
+            // A resizable symbol FILLS its proposed frame (like a resizable image); fall back to
+            // the square em-box estimate on any unspecified axis. The glyph is sized to the
+            // laid-out rect at draw time — the content rule never reads the resolved size (which
+            // would form an AttributeGraph layout cycle).
+            let est = wasmEstimatedSize
+            return CGSize(
+                width: proposedSize.width ?? est.width,
+                height: proposedSize.height ?? est.height
+            )
+        }
+        return wasmEstimatedSize
     }
     // Disambiguate ContentResponder.contains (ShapeStyledLeafView vs RendererLeafView both
     // vend a default); text isn't interactive here, so report no hit.
@@ -241,6 +256,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
     // color means "use the sink default".
     package var wasmFontSize: CGFloat = 17
     package var wasmColor: Color.Resolved? = nil
+    // Host font family to shape this run with (resolved by name: Skia match_family_style /
+    // fontconfig / DirectWrite / Android). Empty = the sink's default text font. Non-empty for
+    // Image(systemName:) icon glyphs, which draw from an open icon font (e.g. "tabler-icons").
+    package var wasmFontFamily: String = ""
+    // Resizable-symbol fill flag (Image(systemName:).resizable()): when true the leaf fills its
+    // proposed frame and the renderer sizes the glyph to the laid-out rect at draw time, instead
+    // of self-measuring to `wasmFontSize`. Keeps the content rule free of any resolved-size read.
+    package var wasmSymbolFill: Bool = false
 
     package init(
         text: ResolvedStyledText,
@@ -248,7 +271,9 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         needsDrawingGroup: Bool = false,
         wasmPlainString: String = "",
         wasmFontSize: CGFloat = 17,
-        wasmColor: Color.Resolved? = nil
+        wasmColor: Color.Resolved? = nil,
+        wasmFontFamily: String = "",
+        wasmSymbolFill: Bool = false
     ) {
         self.text = text
         self.renderer = renderer
@@ -256,6 +281,8 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         self.wasmPlainString = wasmPlainString
         self.wasmFontSize = wasmFontSize
         self.wasmColor = wasmColor
+        self.wasmFontFamily = wasmFontFamily
+        self.wasmSymbolFill = wasmSymbolFill
     }
 
     package static var animatesSize: Bool {

@@ -190,7 +190,8 @@ public protocol WandrDrawSink: AnyObject {
     func drawText(
         _ text: String,
         x: Double, y: Double, width: Double, height: Double,
-        fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float
+        fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float,
+        fontFamily: String
     )
 
     /// Called once at the end of a render pass.

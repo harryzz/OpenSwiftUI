@@ -213,8 +213,17 @@ public struct ViewTransform: Equatable, CustomStringConvertible {
         if matrix.isAffine {
             appendAffineTransform(CGAffineTransform(matrix), inverse: inverse)
         } else {
-            head = Element(next: head, translation: pendingTranslation, element: ProjectionTransformElement(matrix: matrix, inverse: inverse))
-            pendingTranslation = .zero
+            // [wandr] A non-affine 3D projection (e.g. `.rotation3DEffect` about a non-Z axis) would
+            // add a `ProjectionTransformElement` whose `forEach` witness is not emitted for wasm32 →
+            // a `call_indirect` to an uninitialized table slot ("uninitialized element" trap) the
+            // FIRST time event hit-testing walks the transform tree (`ViewTransform.convert(point:)`
+            // → `forEach(inverted:)`), which poisons the whole guest component. The renderer already
+            // DROPS rotation3D, so drop it from the (event) transform tree as well: hit-testing then
+            // proceeds through the remaining rectilinear transforms and simply ignores the minor 3D
+            // tilt, instead of trapping. `pendingTranslation` is left intact so surrounding
+            // translations still compose. Remove once the OpenSwiftUI wasm witness-emission gap is
+            // fixed. See `reference_openswiftui_conditional_wasm_metadata`.
+            wandrWarnOnce("ViewTransform: skipping non-affine projectionTransform (wasm witness gap; 3D tilt not hit-tested)")
         }
     }
     
@@ -259,19 +268,29 @@ public struct ViewTransform: Equatable, CustomStringConvertible {
                 element = next
             } while true
         } else {
+            // [wandr] Collect the head→tail chain into the buffer, then walk it in reverse.
+            // BUG FIXED: the old loop re-initialized `index` from 0 (`initializeElement(at: index)`
+            // with `index` still 0 on the first pass), which OVERWROTE slot 0 (head) and left the
+            // LAST slot uninitialized. `reversed()` then read that uninitialized AnyElement slot and
+            // retained a garbage pointer → "uninitialized element" / OOB memory trap the FIRST time a
+            // MULTI-element transform was hit-tested (e.g. an open side menu contributes offset +
+            // affine elements), which poisoned the whole guest component ("cannot enter component
+            // instance" on every later frame). Fill every slot [0..<depth] exactly once, then
+            // deinitialize (the previous code also leaked the retained element refs).
             withUnsafeTemporaryAllocation(
                 of: AnyElement.self,
                 capacity: head.depth
             ) { bufferPointer in
-                bufferPointer.initializeElement(at: 0, to: head)
-                var element = head
-                var index = 0
-                while let next = element.next {
-                    bufferPointer.initializeElement(at: index, to: next)
+                var element: AnyElement = head
+                var count = 0
+                while true {
+                    bufferPointer.initializeElement(at: count, to: element)
+                    count &+= 1
+                    guard let next = element.next else { break }
                     element = next
-                    index &+= 1
                 }
-                for element in bufferPointer.reversed() {
+                defer { bufferPointer.baseAddress?.deinitialize(count: count) }
+                for element in bufferPointer[..<count].reversed() {
                     element.forEach(inverted: false, stop: &stop, body)
                     if stop { return }
                 }
@@ -347,13 +366,11 @@ public struct ViewTransform: Equatable, CustomStringConvertible {
                     p.x += offset.width; p.y += offset.height
                 }
             case let .affineTransform(matrix, inverse):
-                #if canImport(CoreGraphics)
+                // [wandr] `OpenCoreGraphicsShims.CGAffineTransform.inverted()` is a real 2×3 affine
+                // inverse on every platform (the old off-Apple `#else` wrongly assumed it was
+                // unavailable and left the inverse un-applied → hit-testing through a non-translation
+                // transform, e.g. an open menu's offset/tilt, routed to the wrong location).
                 p = p.applying((inverse != inverted) ? matrix.inverted() : matrix)
-                #else
-                // Off-Apple CGAffineTransform.inverted() is unavailable; the wandr layout
-                // transform stack is translations only, so non-identity affines are rare.
-                if !(inverse != inverted) { p = p.applying(matrix) } else { _openSwiftUIPlatformUnimplementedWarning() }
-                #endif
             default:
                 break // coordinateSpace / sizedSpace / projection / scroll: no point change
             }

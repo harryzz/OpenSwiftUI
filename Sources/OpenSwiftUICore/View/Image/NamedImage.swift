@@ -611,6 +611,21 @@ package enum NamedImage {
 extension Image {
     /// A way to specify where to load "main bundle" images from.
     public static var _mainNamedBundle: Bundle? { nil }
+
+    /// [wandr] The bundle to search for a named image when the caller passes `nil`. On Apple this is
+    /// `Bundle.main`; off-Apple it is `nil`, because `Bundle.main` is a Foundation lazy global that
+    /// TRAPS on wasm32 (it resolves the executable path, unimplemented under WASI) — accessing it
+    /// from `Image("Icon")` poisoned the whole guest ("unreachable"). Named-image loading isn't
+    /// supported off-Apple anyway (`NamedImageProvider.resolve` → `resolveError` → empty), so a nil
+    /// bundle just resolves to an empty image instead of crashing. `Image.Location.bundle` is now
+    /// `Bundle?` to carry this.
+    static var _resolvedMainBundle: Bundle? {
+        #if OPENSWIFTUI_LINK_COREUI
+        Bundle.main
+        #else
+        _mainNamedBundle
+        #endif
+    }
 }
 
 @available(OpenSwiftUI_v1_0, *)
@@ -618,7 +633,10 @@ extension Image {
     // MARK: - Image.Location [TBA]
 
     package enum Location: Equatable, Hashable {
-        case bundle(Bundle)
+        // [wandr] `Bundle?` (was `Bundle`): off-Apple there is no main bundle (see
+        // `Image._resolvedMainBundle`), so a named image with no explicit bundle carries `nil` and
+        // resolves to empty rather than trapping on `Bundle.main`.
+        case bundle(Bundle?)
         case system
         case privateSystem
 
@@ -762,7 +780,7 @@ extension Image {
         self.init(
             NamedImageProvider(
                 name: name,
-                location: .bundle(bundle ?? Bundle.main),
+                location: .bundle(bundle ?? Image._resolvedMainBundle),
                 label: AccessibilityImageLabel(Text(LocalizedStringKey(name), bundle: bundle)),
                 decorative: false
             )
@@ -782,7 +800,7 @@ extension Image {
         self.init(
             NamedImageProvider(
                 name: name,
-                location: .bundle(bundle ?? Bundle.main),
+                location: .bundle(bundle ?? Image._resolvedMainBundle),
                 label: AccessibilityImageLabel(label),
                 decorative: false
             )
@@ -801,7 +819,7 @@ extension Image {
         self.init(
             NamedImageProvider(
                 name: name,
-                location: .bundle(bundle ?? Bundle.main),
+                location: .bundle(bundle ?? Image._resolvedMainBundle),
                 label: nil,
                 decorative: true
             )
@@ -1204,7 +1222,7 @@ extension Image {
             NamedImageProvider(
                 name: name,
                 value: variableValue.map { Float($0) },
-                location: .bundle(bundle ?? Bundle.main),
+                location: .bundle(bundle ?? Image._resolvedMainBundle),
                 label: AccessibilityImageLabel(Text(LocalizedStringKey(name), bundle: bundle)),
                 decorative: false
             )
@@ -1238,7 +1256,7 @@ extension Image {
             NamedImageProvider(
                 name: name,
                 value: variableValue.map { Float($0) },
-                location: .bundle(bundle ?? Bundle.main),
+                location: .bundle(bundle ?? Image._resolvedMainBundle),
                 label: AccessibilityImageLabel(label),
                 decorative: false
             )
@@ -1271,7 +1289,7 @@ extension Image {
             NamedImageProvider(
                 name: name,
                 value: variableValue.map { Float($0) },
-                location: .bundle(bundle ?? Bundle.main),
+                location: .bundle(bundle ?? Image._resolvedMainBundle),
                 label: nil,
                 decorative: true
             )
@@ -1308,7 +1326,7 @@ extension Image.Location: ProtobufMessage {
     package func encode(to encoder: inout ProtobufEncoder) throws {
         switch self {
         case .bundle(let bundle):
-            try encoder.messageField(1, BundlePath(value: bundle.bundlePath))
+            try encoder.messageField(1, BundlePath(value: bundle?.bundlePath ?? ""))
         case .system:
             encoder.emptyField(2)
         case .privateSystem:

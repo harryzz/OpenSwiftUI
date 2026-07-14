@@ -79,3 +79,46 @@ extension _ViewInputs {
         mapEnvironment(id: .isEnabled) { $0.isEnabled }
     }
 }
+
+// MARK: - AllowsHitTesting [wandr]
+// Real `.allowsHitTesting(_:)` (was a cosmetic no-op in the eleev SwiftUI shim). Gates whether a
+// subtree's gesture responders participate in hit-testing: eleev disables the game content while an
+// overlay is open (`.allowsHitTesting(!(modal || menu))`); without this the greedy background
+// DragGesture kept intercepting swipes over the menu and stealing taps from menu items. Kept in
+// Enabled.swift because SwiftPM did not pick up a brand-new file in this target.
+
+private struct AllowsHitTestingKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
+@available(OpenSwiftUI_v1_0, *)
+extension EnvironmentValues {
+    /// Whether the view participates in hit-testing. Default `true`; composed with `&&` up the tree.
+    public var allowsHitTesting: Bool {
+        get { self[AllowsHitTestingKey.self] }
+        set { self[AllowsHitTestingKey.self] = newValue }
+    }
+}
+
+@available(OpenSwiftUI_v1_0, *)
+extension View {
+    /// Configures whether this view (and subtree) participates in hit-test operations.
+    @inlinable
+    nonisolated public func allowsHitTesting(_ enabled: Bool) -> some View {
+        modifier(
+            _EnvironmentKeyTransformModifier(
+                keyPath: \.allowsHitTesting
+            ) { $0 = $0 && enabled }
+        )
+    }
+}
+
+extension CachedEnvironment.ID {
+    static let allowsHitTesting: CachedEnvironment.ID = .init()
+}
+
+extension _ViewInputs {
+    package var allowsHitTesting: Attribute<Bool> {
+        mapEnvironment(id: .allowsHitTesting) { $0.allowsHitTesting }
+    }
+}

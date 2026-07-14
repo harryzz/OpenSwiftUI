@@ -344,6 +344,11 @@ extension Image: View, UnaryView, PrimitiveView {
         inputs: _ViewInputs
     ) -> _ViewOutputs {
         var newInputs = inputs
+        // NOTE: nothing in OpenSwiftUI pushes onto the `Image.Style` stack (it defaults to `.empty`
+        // and has no `ImageStyleProtocol` conformer), so this `popLast` is currently always nil and
+        // the no-style leaf path is always taken. Image tinting (e.g. `.foregroundColor`) flows via
+        // the environment foreground style, which the leaves read. The off-Apple symbol path is the
+        // clean redirect in `Image.Resolved._makeView` → `wandrMakeSymbolView`.
         guard let style = newInputs.popLast(Style.self) else {
             let flags = inputs.archivedView.flags
             var options: ImageResolutionContext.Options = []

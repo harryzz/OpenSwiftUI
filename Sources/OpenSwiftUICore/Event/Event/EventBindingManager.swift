@@ -18,7 +18,11 @@ final public class EventBindingManager {
 
     private var forwardedEventDispatchers: [ObjectIdentifier: any ForwardedEventDispatcher] = [:]
 
-    private var eventBindings: [EventID: EventBinding] = [:]
+    // [wandr] An event id may bind to MORE THAN ONE gesture responder simultaneously — the
+    // most-specific gesture overall PLUS the most-specific tap — so a click and a drag over the
+    // same region are both offered the event and each self-selects (a tap needs stillness, a drag
+    // needs movement). See `bindResponders`.
+    private var eventBindings: [EventID: [EventBinding]] = [:]
 
     private(set) package var isActive: Bool = false
 
@@ -52,20 +56,23 @@ final public class EventBindingManager {
     ) -> (from: EventBinding?, to: EventBinding?)? {
         // [wandr] Minimal: drop/replace the stored binding for this id. Not on the basic
         // tap path (used by gestures that re-target mid-sequence); kept safe + trap-free.
-        let from = eventBindings[identifier]
+        let from = eventBindings[identifier]?.first
         guard let newResponder else {
             eventBindings[identifier] = nil
             return (from, nil)
         }
         let to = EventBinding(responder: newResponder)
-        eventBindings[identifier] = to
+        eventBindings[identifier] = [to]
         return (from, to)
     }
 
     package func willRemoveResponder(_ from: ResponderNode) {
         // [wandr] Drop any bindings pointing at a responder being torn down so we never
         // forward into a dead responder. Safe no-op if none match.
-        eventBindings = eventBindings.filter { $0.value.responder !== from }
+        eventBindings = eventBindings.compactMapValues { bindings in
+            let kept = bindings.filter { $0.responder !== from }
+            return kept.isEmpty ? nil : kept
+        }
     }
 
     package func setInheritedPhase(_ phase: _GestureInputs.InheritedPhase) {
@@ -78,36 +85,43 @@ final public class EventBindingManager {
         }
         isActive = true
 
-        // 1. Bind each event to a responder (reusing an existing binding for its id),
-        //    stamp the binding onto the event, and bucket by bound responder.
+        // 1. Bind each event to its responder(s) (reusing existing bindings for its id), stamp the
+        //    matching binding onto a copy of the event per responder, and bucket by bound responder.
         var handled: Set<EventID> = []
         var boundByResponder: [ObjectIdentifier: (node: ResponderNode, events: [EventID: any EventType])] = [:]
         var time: Time = .zero
 
         for (id, rawEvent) in events {
-            let binding: EventBinding
+            let bindings: [EventBinding]
             if let existing = eventBindings[id] {
-                binding = existing
-            } else if let responder = bindResponder(for: rawEvent, root: rootResponder) {
-                binding = EventBinding(responder: responder)
-                eventBindings[id] = binding
-                delegate?.didBind(to: binding, id: id)
+                bindings = existing
             } else {
-                continue
+                let responders = bindResponders(for: rawEvent, root: rootResponder)
+                guard !responders.isEmpty else {
+                    continue
+                }
+                bindings = responders.map { EventBinding(responder: $0) }
+                eventBindings[id] = bindings
+                for binding in bindings {
+                    delegate?.didBind(to: binding, id: id)
+                }
             }
 
-            var event = rawEvent
-            event.binding = binding
-            if time < event.timestamp {
-                time = event.timestamp
+            if time < rawEvent.timestamp {
+                time = rawEvent.timestamp
             }
-
-            let key = ObjectIdentifier(binding.responder)
-            if var bucket = boundByResponder[key] {
-                bucket.events[id] = event
-                boundByResponder[key] = bucket
-            } else {
-                boundByResponder[key] = (binding.responder, [id: event])
+            // Deliver to every bound responder — each receives the event stamped with its own
+            // binding, so the gesture graph routes it correctly.
+            for binding in bindings {
+                var event = rawEvent
+                event.binding = binding
+                let key = ObjectIdentifier(binding.responder)
+                if var bucket = boundByResponder[key] {
+                    bucket.events[id] = event
+                    boundByResponder[key] = bucket
+                } else {
+                    boundByResponder[key] = (binding.responder, [id: event])
+                }
             }
             handled.insert(id)
         }
@@ -116,53 +130,122 @@ final public class EventBindingManager {
             return []
         }
 
-        // 2. Forward each bucket to the host, which routes to the responder's gesture
-        //    graph, then report the resulting phase back to the delegate (terminal →
-        //    the host resets the bindings for the next sequence).
-        for (_, bucket) in boundByResponder {
+        // 2. Forward each bucket to the host, which routes to the responder's gesture graph, then
+        //    report each phase back to the delegate (terminal → the host resets bindings for the next
+        //    sequence). When an event is co-delivered to a tap AND a drag over the same region,
+        //    process the DISCRETE (tap) responder FIRST so the tap fires before the drag's terminal
+        //    reset can invalidate it. The per-bucket `didUpdate` (→ reset) MUST run between buckets —
+        //    deferring it and calling the next `sendEvents` first re-enters the guest component.
+        let orderedBuckets = boundByResponder.values.sorted { a, b in
+            let aTap = (a.node as? any AnyGestureResponder)?.producesVoidValue ?? false
+            let bTap = (b.node as? any AnyGestureResponder)?.producesVoidValue ?? false
+            return aTap && !bTap
+        }
+        var terminated: Set<ObjectIdentifier> = []
+        for bucket in orderedBuckets {
             let phase = host.sendEvents(bucket.events, rootNode: bucket.node, at: time)
             delegate?.didUpdate(phase: phase, in: self)
+            if phase.isTerminal {
+                terminated.insert(ObjectIdentifier(bucket.node))
+            }
+        }
+        // [wandr] Remove ONLY the bindings whose gesture reached a terminal phase — never blanket-
+        // clear the sequence. With co-delivery (a tap + a drag bound to one event), the tap FAILS
+        // the instant the swipe moves; a blanket reset would then also drop the still-active drag's
+        // binding, rebind it mid-gesture, and lose its onEnded → eleev's `ignoreGesture` stays true
+        // and swipes freeze until it happens to recover. Granular removal keeps the drag alive to
+        // its own terminal (up), so onEnded always fires.
+        if !terminated.isEmpty {
+            for id in handled {
+                guard var bindings = eventBindings[id] else { continue }
+                bindings.removeAll { terminated.contains(ObjectIdentifier($0.responder)) }
+                eventBindings[id] = bindings.isEmpty ? nil : bindings
+            }
+            if eventBindings.isEmpty {
+                isActive = false
+            }
         }
         return handled
     }
 
-    /// [wandr] Resolve an event to the responder that should receive it.
+    /// [wandr] Resolve an event to the responder that should receive it, by geometric specificity:
+    /// among ALL valid gesture responders whose hit frame contains the point, bind the MOST SPECIFIC
+    /// (smallest hit frame). This is the tightest interactive region under the pointer, so a button's
+    /// tap (e.g. 48×48) wins over an overlapping broad drag (e.g. a full-screen side-menu swipe area
+    /// drawn over the header buttons), and the board's DragGesture wins over the full-screen dismiss
+    /// tap for a board swipe. `root.bindEvent`'s plain front-to-back traversal instead returned the
+    /// frontmost *sibling* that merely contained the point, so a broad frontmost gesture swallowed
+    /// every event meant for a tighter gesture beneath it.
     ///
-    /// First tries the structural `bindEvent` traversal. With `GestureContainerFeature`
-    /// disabled (no geometric hit-testing leaf responders exist yet), that returns nil
-    /// for a gesture whose content produced no responders, so we fall back to a
-    /// structural search for the first valid gesture responder. This delivers a single
-    /// `.onTapGesture` regardless of the precise hit location — correct enough for the
-    /// first milestone; true geometry is a follow-up (see HitTestBindingModifier).
-    private func bindResponder(for event: any EventType, root: ResponderNode) -> ResponderNode? {
-        if let bound = root.bindEvent(event) {
-            return bound
+    /// Returns an array for the caller's multi-binding shape, but binds exactly ONE responder:
+    /// co-delivering a single event to two gesture graphs re-enters the guest component on the 2nd
+    /// sequence and traps ("cannot enter component instance"). Consequence: dismissing an overlay by
+    /// tapping its full-screen backdrop over a tighter drag region does NOT work — dismiss via the
+    /// overlay's own controls. True simultaneous arbitration is a follow-up (needs the gesture graph
+    /// to accept concurrent sequences without re-entrancy).
+    ///
+    /// Structural path (`GestureContainerFeature` disabled): fall back to the first valid gesture
+    /// regardless of location — kept for the no-geometry configuration.
+    private func bindResponders(for event: any EventType, root: ResponderNode) -> [ResponderNode] {
+        guard GestureContainerFeature.isEnabled else {
+            if let bound = root.bindEvent(event) {
+                return [bound]
+            }
+            guard HitTestableEvent(event) != nil else {
+                return []
+            }
+            var found: ResponderNode?
+            root.visit { node in
+                if let gesture = node as? any AnyGestureResponder {
+                    _ = gesture.gestureContainer
+                    if gesture.isValid {
+                        found = node
+                        return .cancel
+                    }
+                }
+                return .next
+            }
+            return found.map { [$0] } ?? []
         }
-        // [wandr] With geometric hit-testing on, root.bindEvent already did a location-aware
-        // hit-test; a nil result means the point hit no gesture's content, so we must NOT fall
-        // back to "first valid gesture regardless of location" (that's the old location-blind
-        // behavior). Only use the structural fallback when the geometric path is disabled.
-        guard !GestureContainerFeature.isEnabled else {
-            return nil
+        guard let hitEvent = HitTestableEvent(event) else {
+            return []
         }
-        guard HitTestableEvent(event) != nil else {
-            return nil
-        }
-        var found: ResponderNode?
+        let point = hitEvent.hitTestLocation
+        var smallest: (node: ResponderNode, area: CGFloat)?
+        var smallestTap: (node: ResponderNode, area: CGFloat)?
         root.visit { node in
             if let gesture = node as? any AnyGestureResponder {
-                // Materialize the gesture container; a GestureResponder only reports
-                // `isValid == true` once its container exists (it is created lazily, and
-                // nothing on the structural path would otherwise trigger it).
+                // Materialize the container; `isValid` is false until it exists (created lazily).
                 _ = gesture.gestureContainer
-                if gesture.isValid {
-                    found = node
-                    return .cancel
+                let frame = gesture.hitFrame
+                // Skip gestures whose subtree has `.allowsHitTesting(false)` (an open overlay
+                // disabling the background it covers) so they don't intercept events.
+                if gesture.isValid, gesture.hitTestable, frame.contains(point) {
+                    let area = frame.width * frame.height
+                    if smallest == nil || area < smallest!.area {
+                        smallest = (node, area)
+                    }
+                    if gesture.producesVoidValue, smallestTap == nil || area < smallestTap!.area {
+                        smallestTap = (node, area)
+                    }
                 }
             }
             return .next
         }
-        return found
+        // Deliver to the most-specific gesture overall PLUS the most-specific TAP (when different),
+        // so a click self-selects the tap even where a tighter continuous (drag) region overlaps —
+        // e.g. tapping the board area to dismiss an open overlay while the board's own DragGesture is
+        // the smallest gesture there. Both self-arbitrate by movement (tap = stillness, drag =
+        // translation), so co-delivering is safe; a broader same-kind gesture is deliberately NOT
+        // bound, so it can't steal the event or double-fire.
+        var result: [ResponderNode] = []
+        if let smallest {
+            result.append(smallest.node)
+        }
+        if let smallestTap, smallestTap.node !== smallest?.node {
+            result.append(smallestTap.node)
+        }
+        return result
     }
 
     @discardableResult

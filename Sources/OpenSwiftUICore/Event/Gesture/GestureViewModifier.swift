@@ -71,6 +71,7 @@ extension GestureViewModifier {
                 modifier: modifier.value,
                 position: inputs.animatedPosition(),
                 size: inputs.animatedCGSize(),
+                hitTestable: inputs.allowsHitTesting,
                 inputs: inputs,
                 viewSubgraph: .current!
             )
@@ -151,6 +152,21 @@ package protocol AnyGestureContainingResponder: ViewResponder {
 
 package protocol AnyGestureResponder: AnyGestureContainingResponder {
     var inputs: _ViewInputs { get }
+
+    // [wandr] The gesture's global hit frame (its modified view's layout frame). Used by
+    // EventBindingManager to bind the MOST SPECIFIC (smallest-area) gesture under the pointer.
+    var hitFrame: CGRect { get }
+
+    // [wandr] True when the gesture carries no continuous value (Value == Void, e.g. TapGesture) —
+    // i.e. a DISCRETE gesture; a continuous gesture (DragGesture) has a non-Void Value. Lets
+    // EventBindingManager also bind the most-specific TAP under the pointer, so a click is
+    // recognized even where a tighter continuous (drag) region overlaps it (e.g. tap-to-dismiss an
+    // overlay while the board's DragGesture is the tightest gesture there).
+    var producesVoidValue: Bool { get }
+
+    // [wandr] False when `.allowsHitTesting(false)` covers this gesture's subtree — bindResponders
+    // then skips it, so an open overlay's background stops intercepting events.
+    var hitTestable: Bool { get }
 
     var childSubgraph: Subgraph? { get set }
 
@@ -301,6 +317,9 @@ private class GestureResponder<Modifier>: DefaultLayoutViewResponder, AnyGesture
     // stack, text) — no per-view-type leaf responders needed.
     var hitFrame: CGRect = .zero
 
+    // [wandr] Whether this gesture participates in hit-testing (driven by `.allowsHitTesting`).
+    var hitTestable: Bool = true
+
     init(modifier: Attribute<Modifier>, inputs: _ViewInputs) {
         self.modifier = modifier
         super.init(inputs: inputs)
@@ -308,6 +327,10 @@ private class GestureResponder<Modifier>: DefaultLayoutViewResponder, AnyGesture
 
     var gestureType: any Any.Type {
         Modifier.ContentGesture.self
+    }
+
+    var producesVoidValue: Bool {
+        Modifier.ContentGesture.Value.self == Void.self
     }
 
     var relatedAttribute: AnyAttribute {
@@ -505,6 +528,11 @@ private struct GestureFilter<Modifier>: StatefulRule where Modifier: GestureView
 
     @Attribute var size: CGSize
 
+    // [wandr] `.allowsHitTesting(false)` up the tree → this subtree's gesture is excluded from
+    // hit-testing (EventBindingManager.bindResponders skips it), so an overlay can disable the
+    // background it covers instead of the background stealing events.
+    @Attribute var hitTestable: Bool
+
     var inputs: _ViewInputs
 
     var viewSubgraph: Subgraph
@@ -525,6 +553,7 @@ private struct GestureFilter<Modifier>: StatefulRule where Modifier: GestureView
             responder.children = children
         }
         responder.hitFrame = CGRect(origin: position, size: size)
+        responder.hitTestable = hitTestable
         if !hasValue {
             value = [self.responder]
         }

@@ -590,6 +590,9 @@ let openSwiftUICoreTarget = Target.target(
         .product(name: "OpenAttributeGraphShims", package: "OpenAttributeGraph"),
         .product(name: "OpenRenderBoxShims", package: "OpenRenderBox"),
         .product(name: "OpenObservation", package: "OpenObservation"),
+        // [wandr] open, cross-platform SF-Symbol provider for the non-Apple Image(systemName:)
+        // path (View/Image/WandrSymbolGlyph.swift, gated `#if !OPENSWIFTUI_LINK_COREUI`).
+        .product(name: "OpenSFSymbols", package: "OpenSFSymbols"),
     ] + (swiftUIRenderCondition && symbolLocatorCondition ? ["OpenSwiftUISymbolDualTestsSupport"] : []),
     cSettings: sharedCSettings,
     cxxSettings: sharedCxxSettings,
@@ -924,6 +927,10 @@ if useLocalDeps {
     }
     package.dependencies += dependencies
 }
+
+// [wandr] OpenSFSymbols — local-only sibling package; the non-Apple Image(systemName:) render path
+// (OpenSwiftUICore/View/Image/WandrSymbolGlyph.swift) resolves SF names → open icon-font glyphs.
+package.dependencies.append(.package(path: "../OpenSFSymbols"))
 
 if openCombineCondition {
     package.dependencies.append(

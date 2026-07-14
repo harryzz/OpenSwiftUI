@@ -285,6 +285,13 @@ extension Image.Resolved: UnaryView, PrimitiveView, ShapeStyledLeafView, LeafVie
         view: _GraphValue<Self>,
         inputs: _ViewInputs
     ) -> _ViewOutputs {
+        #if !OPENSWIFTUI_LINK_COREUI
+        // [wandr] Non-Apple SF-Symbol rendering: CoreUI/CUICatalog (the glyph source) is
+        // Darwin-only, so resolve() yielded an empty image carrying only the symbol name. Draw a
+        // Unicode-glyph fallback via the text leaf. Off-Apple no resolved image has pixels, so this
+        // is the sole render path here. See WandrSymbolGlyph.swift.
+        return wandrMakeSymbolView(view: view, inputs: inputs)
+        #else
         var newInputs = inputs
         let imageLayoutAsText: Bool
         if inputs.requestsLayoutComputer, Semantics.ImagesLayoutAsText.isEnabled {
@@ -353,6 +360,7 @@ extension Image.Resolved: UnaryView, PrimitiveView, ShapeStyledLeafView, LeafVie
             )
         }
         return outputs
+        #endif
     }
 
     private struct MakeRepresentableContext: Rule, AsyncAttribute {

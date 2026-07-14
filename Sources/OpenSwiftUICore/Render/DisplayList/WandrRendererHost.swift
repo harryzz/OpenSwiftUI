@@ -71,13 +71,12 @@ final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRende
         phase: GesturePhase<Void>,
         in eventBindingManager: EventBindingManager
     ) {
-        // [wandr] Mirror CAHostingLayer: once a gesture sequence terminates, drop the
-        // bindings so the next down/up starts fresh. Reset is a no-op subgraph-wise
-        // (we never force-tear-down — see resetEvents) so this is trap-safe.
-        guard phase.isTerminal else {
-            return
-        }
-        eventBindingManager.reset(resetForwardedEventDispatchers: false)
+        // [wandr] Binding cleanup is GRANULAR now — `EventBindingManager.sendDownstream` drops each
+        // responder's binding exactly when THAT gesture reaches a terminal phase. We must NOT
+        // blanket-reset on any terminal here: an event co-delivered to a tap AND a drag would
+        // otherwise have the tap FAILING mid-drag (movement ≠ tap) clear the still-active drag's
+        // binding too, rebinding it mid-gesture and losing its onEnded → eleev's `ignoreGesture`
+        // sticks true and swipes freeze. No-op.
     }
 
     package func renderOnce() {
