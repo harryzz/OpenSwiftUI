@@ -47,6 +47,58 @@ private func wandrEffectName(_ e: DisplayList.Effect) -> String {
     }
 }
 
+// [wandr] Serialize a Path to SVG path-data (the wasi:canvas clip-path / draw-path grammar),
+// mapping each point through `t` (path-local → surface). Used for clip regions (`.clip`) and
+// solid-color `.shape` fills so rounded rects / circles / capsules render their real outline.
+//
+// NOTE: `Path.forEach` is an unimplemented stub off-Apple (traps), so we read `path.storage`
+// directly and handle the shapes 2048 actually uses (rect, roundedRect, ellipse). Arbitrary /
+// deprecated storage falls back to the bounding rect — a plain-rect clip instead of a trap.
+private func wandrSVGPath(_ path: Path, applying t: CGAffineTransform) -> String {
+    switch path.storage {
+    case .empty:
+        return ""
+    case let .rect(r):
+        return wandrRoundedRectSVG(r, corner: .zero, applying: t)
+    case let .roundedRect(rr):
+        return wandrRoundedRectSVG(rr.rect, corner: rr.clampedCornerSize, applying: t)
+    case let .ellipse(r):
+        // An inscribed ellipse == a rounded rect whose corner radii are half the sides.
+        return wandrRoundedRectSVG(r, corner: CGSize(width: r.width / 2, height: r.height / 2), applying: t)
+    default:
+        let b = path.boundingRect
+        return wandrRoundedRectSVG(b, corner: .zero, applying: t)
+    }
+}
+
+// [wandr] SVG for a rect with (possibly zero) uniform corner radii, each point mapped through `t`.
+// Arc radii are scaled by the transform's linear magnitude — correct for the translation+scale that
+// 2048 applies to clips (rotation would need an x-axis-rotation term, not emitted).
+private func wandrRoundedRectSVG(_ rect: CGRect, corner: CGSize, applying t: CGAffineTransform) -> String {
+    guard rect.width > 0, rect.height > 0 else { return "" }
+    let x = rect.minX, y = rect.minY, w = rect.width, h = rect.height
+    let cw = min(corner.width, w / 2), ch = min(corner.height, h / 2)
+    func P(_ px: CGFloat, _ py: CGFloat) -> CGPoint { CGPoint(x: px, y: py).applying(t) }
+    if cw <= 0.01 || ch <= 0.01 {
+        let a = P(x, y), b = P(x + w, y), c = P(x + w, y + h), d = P(x, y + h)
+        return "M \(a.x) \(a.y) L \(b.x) \(b.y) L \(c.x) \(c.y) L \(d.x) \(d.y) Z"
+    }
+    let rx = cw * (t.a * t.a + t.b * t.b).squareRoot()
+    let ry = ch * (t.c * t.c + t.d * t.d).squareRoot()
+    let p = [
+        P(x + cw, y), P(x + w - cw, y),
+        P(x + w, y + ch), P(x + w, y + h - ch),
+        P(x + w - cw, y + h), P(x + cw, y + h),
+        P(x, y + h - ch), P(x, y + ch),
+    ]
+    // Clockwise (SVG y-down ⇒ sweep-flag 1), one 90° arc per corner.
+    return "M \(p[0].x) \(p[0].y) "
+        + "L \(p[1].x) \(p[1].y) A \(rx) \(ry) 0 0 1 \(p[2].x) \(p[2].y) "
+        + "L \(p[3].x) \(p[3].y) A \(rx) \(ry) 0 0 1 \(p[4].x) \(p[4].y) "
+        + "L \(p[5].x) \(p[5].y) A \(rx) \(ry) 0 0 1 \(p[6].x) \(p[6].y) "
+        + "L \(p[7].x) \(p[7].y) A \(rx) \(ry) 0 0 1 \(p[0].x) \(p[0].y) Z"
+}
+
 // MARK: - DisplayList + wandr sink rendering
 
 extension DisplayList {
@@ -126,15 +178,31 @@ private struct WandrSinkVisitor {
         switch content.value {
         case let .color(color):
             emitFill(frame: frame, color: color.multiplyingOpacity(by: opacity))
-        case let .shape(_, paint, _):
-            if let color = paint.wandrResolvedColor {
-                emitFill(frame: frame, color: color.multiplyingOpacity(by: opacity))
-            } else {
+        case let .shape(shapePath, paint, _):
+            guard let color = paint.wandrResolvedColor else {
                 wandrWarnOnce("render: .shape paint is not a solid color (gradient/material/pattern) — dropped")
+                break
             }
-            // NOTE: shapes fill their bounding RECT only — the path is ignored, so rounded
-            // rects / circles / capsules / custom paths render as plain rectangles.
-            wandrWarnOnce("render: .shape rendered as bounding rect only (path ignored — corners/circles look square)")
+            let resolved = color.multiplyingOpacity(by: opacity)
+            // The shape's Path is path-local (origin-based, DisplayListViewModel offsets it by the
+            // item frame origin). Map local → surface with the linear part of `transform` plus the
+            // surface-space frame origin (translation+scale case; rotation is the deferred 3D path).
+            let shapeT = CGAffineTransform(
+                a: transform.a, b: transform.b, c: transform.c, d: transform.d,
+                tx: frame.minX, ty: frame.minY
+            )
+            let svg = wandrSVGPath(shapePath, applying: shapeT)
+            if svg.isEmpty {
+                emitFill(frame: frame, color: resolved)   // .empty / degenerate: fall back to bounds
+            } else {
+                sink.fillPath(
+                    svgPath: svg,
+                    x: Double(frame.minX), y: Double(frame.minY),
+                    width: Double(frame.width), height: Double(frame.height),
+                    red: resolved.red, green: resolved.green, blue: resolved.blue,
+                    opacity: resolved.opacity
+                )
+            }
         case let .flattened(list, offset, _):
             append(
                 list: list,
@@ -191,6 +259,18 @@ private struct WandrSinkVisitor {
             append(list: list, transform: transform, opacity: opacity * alpha)
         case let .transform(.affine(affine)):
             append(list: list, transform: transform.concatenating(affine), opacity: opacity)
+        case let .clip(clipPath, _, _):
+            // The clip Path is local (origin .zero, from _ClipEffect.effectValue); the effect
+            // item's frame origin is already folded into `transform` above, so mapping the path
+            // through `transform` places the clip in surface space — exactly like content frames.
+            let svg = wandrSVGPath(clipPath, applying: transform)
+            if svg.isEmpty {
+                append(list: list, transform: transform, opacity: opacity)
+            } else {
+                sink.pushClip(svgPath: svg)
+                append(list: list, transform: transform, opacity: opacity)
+                sink.popClip()
+            }
         default:
             // TODO: clip, mask, blendMode, filter — recurse unmodified for now.
             wandrWarnOnce("render: dropped effect .\(wandrEffectName(effect)) (content still drawn, effect ignored)")

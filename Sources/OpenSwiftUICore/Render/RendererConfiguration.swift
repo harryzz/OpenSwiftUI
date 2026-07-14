@@ -194,8 +194,41 @@ public protocol WandrDrawSink: AnyObject {
         fontFamily: String
     )
 
+    /// Fill an arbitrary path (surface-space SVG path-data, fill-rule nonzero) with a solid
+    /// sRGB color — used for `.shape` content whose paint is a solid color, so rounded rects /
+    /// circles / capsules / custom outlines render their real shape instead of a bounding
+    /// rectangle. `x/y/width/height` is the path's bounding rect (surface space); the default
+    /// implementation ignores the SVG and fills that rect, so a sink without path support keeps
+    /// today's behavior (no regression).
+    func fillPath(
+        svgPath: String,
+        x: Double, y: Double, width: Double, height: Double,
+        red: Float, green: Float, blue: Float, opacity: Float
+    )
+
+    /// Push a clip region: intersect the drawing area with `svgPath` (surface-space SVG
+    /// path-data, fill-rule nonzero) on a *saved* graphics state. Balanced by `popClip()`.
+    /// The default implementation is a no-op (draws unclipped — today's behavior).
+    func pushClip(svgPath: String)
+
+    /// Pop the clip region pushed by the matching `pushClip` (restore the saved state).
+    func popClip()
+
     /// Called once at the end of a render pass.
     func endFrame()
+}
+
+extension WandrDrawSink {
+    public func fillPath(
+        svgPath: String,
+        x: Double, y: Double, width: Double, height: Double,
+        red: Float, green: Float, blue: Float, opacity: Float
+    ) {
+        fillRect(x: x, y: y, width: width, height: height,
+                 red: red, green: green, blue: blue, opacity: opacity)
+    }
+    public func pushClip(svgPath: String) {}
+    public func popClip() {}
 }
 /* OpenSwiftUI Addition End */
 
