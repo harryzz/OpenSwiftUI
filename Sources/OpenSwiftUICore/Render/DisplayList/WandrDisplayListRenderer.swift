@@ -275,6 +275,20 @@ private struct WandrSinkVisitor {
                 append(list: list, transform: transform, opacity: opacity)
                 sink.popClip()
             }
+        case let .filter(.shadow(style)):
+            // eleev's cards are `.clipShape(RoundedRectangle).shadow()` — the shadow wraps a clip, so
+            // a per-shape shadow would be clipped away. Draw a blurred shadow of the card's SILHOUETTE
+            // (the wrapped clip path) BEHIND, then the clipped card on top. No silhouette ⇒ drop.
+            if let silhouette = wandrShadowSilhouette(list, transform: transform) {
+                let c = style.color
+                sink.fillPathShadow(
+                    svgPath: silhouette,
+                    dx: Double(style.offset.width), dy: Double(style.offset.height),
+                    blur: Double(style.radius),
+                    red: c.red, green: c.green, blue: c.blue, opacity: c.opacity * opacity
+                )
+            }
+            append(list: list, transform: transform, opacity: opacity)
         default:
             // TODO: clip, mask, blendMode, filter — recurse unmodified for now.
             wandrWarnOnce("render: dropped effect .\(wandrEffectName(effect)) (content still drawn, effect ignored)")
@@ -289,6 +303,20 @@ private struct WandrSinkVisitor {
     // The ProjectionTransform → wasi:canvas (Skia) 3×3 map is a transpose (verified by the affine
     // case: m00=m11, m01=m21, m02=m31; m10=m12, m11=m22, m12=m32; m20=m13, m21=m23, m22=m33).
     // Sinks that can't do a perspective CTM draw flat (effect dropped, 2D position preserved).
+    // [wandr] The silhouette a `.filter(.shadow)` casts: the clip path of a directly-wrapped `.clip`
+    // effect (eleev's `.clipShape(RoundedRectangle).shadow()` pattern), in surface coordinates.
+    private func wandrShadowSilhouette(_ list: DisplayList, transform: CGAffineTransform) -> String? {
+        for item in list.items {
+            guard case let .effect(effect, _) = item.value,
+                  case let .clip(clipPath, _, _) = effect else { continue }
+            let framed = CGAffineTransform(translationX: item.frame.minX, y: item.frame.minY)
+                .concatenating(transform)
+            let svg = wandrSVGPath(clipPath, applying: framed)
+            if !svg.isEmpty { return svg }
+        }
+        return nil
+    }
+
     private mutating func wandrApplyProjection(
         _ pt: ProjectionTransform,
         list: DisplayList,

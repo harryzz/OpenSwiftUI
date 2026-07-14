@@ -232,6 +232,15 @@ public protocol WandrDrawSink: AnyObject {
         m20: Double, m21: Double, m22: Double
     )
 
+    /// Fill `svgPath` (surface space) OFFSET by (dx,dy) and blurred by `blur` (Gaussian sigma) with a
+    /// solid sRGB color — a drop shadow of a silhouette (from `.filter(.shadow)`; drawn behind the
+    /// content, outside its clip). Default no-op (shadow dropped — today's behavior, no regression).
+    func fillPathShadow(
+        svgPath: String,
+        dx: Double, dy: Double, blur: Double,
+        red: Float, green: Float, blue: Float, opacity: Float
+    )
+
     /// Called once at the end of a render pass.
     func endFrame()
 }
@@ -254,6 +263,10 @@ extension WandrDrawSink {
         m00: Double, m01: Double, m02: Double,
         m10: Double, m11: Double, m12: Double,
         m20: Double, m21: Double, m22: Double
+    ) {}
+    public func fillPathShadow(
+        svgPath: String, dx: Double, dy: Double, blur: Double,
+        red: Float, green: Float, blue: Float, opacity: Float
     ) {}
 }
 /* OpenSwiftUI Addition End */
