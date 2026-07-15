@@ -209,6 +209,12 @@ extension Text {
 // for layout. The conformance is harmless on renderers that don't use it (Apple's glyph path).
 extension StyledTextContentView: RendererLeafView, LeafViewLayout {
     private var wasmEstimatedSize: CGSize {
+        // [wandr] A real bundle bitmap (task 114) sizes from its ACTUAL decoded pixel dimensions —
+        // never text metrics. `wasmSymbolFill` below still governs fill-vs-intrinsic behavior (it's
+        // reused for both a resizable SF Symbol and a `.resizable()` Image bitmap alike).
+        if let wasmBitmapImage {
+            return wasmBitmapImage.unrotatedPixelSize
+        }
         if wasmSymbolFill {
             // Icon glyph: a ~square em box, so `scaledToFit` treats the symbol as square.
             return CGSize(width: wasmFontSize, height: wasmFontSize)
@@ -219,14 +225,23 @@ extension StyledTextContentView: RendererLeafView, LeafViewLayout {
         )
     }
     package func content() -> DisplayList.Content.Value {
-        .text(self, wasmEstimatedSize)
+        // [wandr] A real bundle bitmap (task 114) emits a REAL `.image` DisplayList case directly —
+        // not routed "through text": StyledTextContentView is only the dispatch/wiring node this
+        // reaches via off-Apple's sole Image.Resolved render path (WandrSymbolGlyph.swift); the
+        // actual content it emits is the same `.image(GraphicsImage)` case Apple's real
+        // ShapeStyledLeafView path would produce, handled identically by WandrDisplayListRenderer.
+        if let wasmBitmapImage {
+            return .image(wasmBitmapImage)
+        }
+        return .text(self, wasmEstimatedSize)
     }
     package func sizeThatFits(in proposedSize: _ProposedSize) -> CGSize {
         if wasmSymbolFill {
-            // A resizable symbol FILLS its proposed frame (like a resizable image); fall back to
-            // the square em-box estimate on any unspecified axis. The glyph is sized to the
-            // laid-out rect at draw time — the content rule never reads the resolved size (which
-            // would form an AttributeGraph layout cycle).
+            // A resizable symbol/bitmap FILLS its proposed frame (like SwiftUI's real
+            // `.resizable()`); fall back to the intrinsic-size estimate (real pixel size for a
+            // bitmap, square em-box for a symbol) on any unspecified axis. The content is sized to
+            // the laid-out rect at draw time — the content rule never reads the resolved size
+            // (which would form an AttributeGraph layout cycle).
             let est = wasmEstimatedSize
             return CGSize(
                 width: proposedSize.width ?? est.width,
@@ -264,6 +279,13 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
     // proposed frame and the renderer sizes the glyph to the laid-out rect at draw time, instead
     // of self-measuring to `wasmFontSize`. Keeps the content rule free of any resolved-size read.
     package var wasmSymbolFill: Bool = false
+    // [wandr] A real decoded bitmap (task 114 named-image loading) piggybacking on this leaf's
+    // already-working _makeView call path (WandrSymbolGlyph.swift's wandrMakeSymbolView, the sole
+    // off-Apple Image.Resolved render path — see ResolvedImage.swift's `#if !OPENSWIFTUI_LINK_COREUI`
+    // gate, which routes EVERY off-Apple image, symbol or bitmap, through StyledTextContentView).
+    // When set, `shape(in:)` emits real `.image` DisplayList content instead of `.text`; nil (the
+    // default) leaves all existing text/symbol-glyph rendering completely unaffected.
+    package var wasmBitmapImage: GraphicsImage? = nil
 
     package init(
         text: ResolvedStyledText,
@@ -273,7 +295,8 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         wasmFontSize: CGFloat = 17,
         wasmColor: Color.Resolved? = nil,
         wasmFontFamily: String = "",
-        wasmSymbolFill: Bool = false
+        wasmSymbolFill: Bool = false,
+        wasmBitmapImage: GraphicsImage? = nil
     ) {
         self.text = text
         self.renderer = renderer
@@ -283,6 +306,7 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         self.wasmColor = wasmColor
         self.wasmFontFamily = wasmFontFamily
         self.wasmSymbolFill = wasmSymbolFill
+        self.wasmBitmapImage = wasmBitmapImage
     }
 
     package static var animatesSize: Bool {
@@ -290,6 +314,9 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
     }
 
     package func shape(in size: CGSize) -> FramedShape {
+        if let wasmBitmapImage {
+            return (.image(wasmBitmapImage), CGRect(origin: .zero, size: size))
+        }
         var frame = CGRect(origin: .zero, size: size)
         if let renderer {
             frame = frame.outset(by: renderer.displayPadding)

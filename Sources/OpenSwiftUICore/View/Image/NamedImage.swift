@@ -16,6 +16,15 @@ import CoreGraphics_Private
 package import CoreUI
 import GraphicsServices_Private
 #endif
+#if !OPENSWIFTUI_LINK_COREUI
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(WASILibc)
+import WASILibc
+#endif
+#endif
 #if OPENSWIFTUI_LINK_SFSYMBOLS
 import SFSymbols
 #endif
@@ -918,9 +927,43 @@ extension Image {
                     return resolveBitmap(key: key, info: info, in: context)
                 }
             }
+            #else
+            // [wandr] Off-Apple there is no `.xcassets`/`CUICatalog` decoder (Darwin-only, gated
+            // above). Named bundle images are instead read directly from the app's `/assets`
+            // preopen — a PNG named `<name>.png` sitting next to the app's other bundled files
+            // (mirrors how `Strings.plist` is read; see e.g. the app-side `PlistConfiguration`).
+            // Only `.bundle` locations are attempted (`.system`/`.privateSystem` are SF Symbols,
+            // handled separately by `WandrSymbolGlyph.swift`). Missing/unreadable file -> the
+            // existing `resolveError` path, unchanged (empty image), same as today.
+            if case .bundle = location, let resolved = wandrResolveBundleBitmap(in: context) {
+                return resolved
+            }
             #endif
             return resolveError(in: context.environment)
         }
+
+        #if !OPENSWIFTUI_LINK_COREUI
+        private func wandrResolveBundleBitmap(in context: ImageResolutionContext) -> Image.Resolved? {
+            guard let file = fopen("/assets/\(name).png", "rb") else { return nil }
+            defer { fclose(file) }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 8192)
+            while true {
+                let read = buffer.withUnsafeMutableBytes { fread($0.baseAddress, 1, $0.count, file) }
+                if read <= 0 { break }
+                data.append(contentsOf: buffer[0..<read])
+            }
+            guard let image = CGImage(pngData: data) else { return nil }
+            let graphicsImage = GraphicsImage(
+                contents: .cgImage(image),
+                scale: 1.0,
+                unrotatedPixelSize: CGSize(width: image.width, height: image.height),
+                orientation: .up,
+                isTemplate: false
+            )
+            return Image.Resolved(image: graphicsImage, decorative: decorative, label: label)
+        }
+        #endif
 
         package func resolveError(in environment: EnvironmentValues) -> Image.Resolved {
             if let bundle = location.bundle {

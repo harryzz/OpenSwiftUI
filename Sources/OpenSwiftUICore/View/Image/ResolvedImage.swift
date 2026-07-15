@@ -286,10 +286,12 @@ extension Image.Resolved: UnaryView, PrimitiveView, ShapeStyledLeafView, LeafVie
         inputs: _ViewInputs
     ) -> _ViewOutputs {
         #if !OPENSWIFTUI_LINK_COREUI
-        // [wandr] Non-Apple SF-Symbol rendering: CoreUI/CUICatalog (the glyph source) is
-        // Darwin-only, so resolve() yielded an empty image carrying only the symbol name. Draw a
-        // Unicode-glyph fallback via the text leaf. Off-Apple no resolved image has pixels, so this
-        // is the sole render path here. See WandrSymbolGlyph.swift.
+        // [wandr] CoreUI/CUICatalog (Apple's .xcassets/SF-Symbol decoder) is Darwin-only, so this is
+        // the SOLE off-Apple Image.Resolved render path — for BOTH SF Symbols (resolve() yielded an
+        // empty image carrying only the symbol name; drawn as a Unicode-glyph text-leaf fallback)
+        // AND real bundle bitmaps (resolve() read a real PNG from /assets — NamedImage.swift's
+        // wandrResolveBundleBitmap — routed to real .image DisplayList content). See
+        // WandrSymbolGlyph.swift's wandrMakeSymbolView/WandrSymbolLeaf for the dynamic branch.
         return wandrMakeSymbolView(view: view, inputs: inputs)
         #else
         var newInputs = inputs

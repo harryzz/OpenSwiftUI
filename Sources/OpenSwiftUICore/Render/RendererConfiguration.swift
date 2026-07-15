@@ -241,6 +241,24 @@ public protocol WandrDrawSink: AnyObject {
         red: Float, green: Float, blue: Float, opacity: Float
     )
 
+    /// Draw an encoded bitmap (from `.content(.image)`, e.g. a named bundle `Image`) into the
+    /// given frame (surface space). `data` is the RAW ENCODED file bytes (e.g. PNG) — the sink
+    /// decodes host-side (wasi:canvas `graphics.decode-image` or equivalent); OpenSwiftUICore
+    /// never decodes pixels itself, matching how `.shape`'s SVG path stays undecoded until the
+    /// sink draws it. `pixelWidth`/`pixelHeight` are the image's TRUE decoded pixel dimensions
+    /// (already known from the header parse that produced `data`'s `CGImage` — the decode call
+    /// itself typically doesn't hand dimensions back, so callers need this to build a correct
+    /// source rect). `name` is a stable cache key (the same bundle image redraws every frame; a
+    /// sink should decode once and cache). Default no-op (image dropped — today's behavior, no
+    /// regression for a sink that doesn't implement it).
+    func drawImage(
+        data: [UInt8],
+        name: String,
+        pixelWidth: Int, pixelHeight: Int,
+        x: Double, y: Double, width: Double, height: Double,
+        opacity: Float
+    )
+
     /// Called once at the end of a render pass.
     func endFrame()
 }
@@ -267,6 +285,13 @@ extension WandrDrawSink {
     public func fillPathShadow(
         svgPath: String, dx: Double, dy: Double, blur: Double,
         red: Float, green: Float, blue: Float, opacity: Float
+    ) {}
+    public func drawImage(
+        data: [UInt8],
+        name: String,
+        pixelWidth: Int, pixelHeight: Int,
+        x: Double, y: Double, width: Double, height: Double,
+        opacity: Float
     ) {}
 }
 /* OpenSwiftUI Addition End */

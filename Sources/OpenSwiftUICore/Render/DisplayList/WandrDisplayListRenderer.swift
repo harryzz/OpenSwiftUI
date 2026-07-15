@@ -242,8 +242,23 @@ private struct WandrSinkVisitor {
                 opacity: (c?.opacity ?? 1.0) * opacity,
                 fontFamily: textView.wasmFontFamily
             )
+        case let .image(graphicsImage):
+            guard case let .cgImage(cgImage) = graphicsImage.contents else {
+                // Vector glyph / IOSurface / color-fill / named-deferred images aren't produced by
+                // the off-Apple bitmap resolve path (see NamedImage.swift) — nothing to draw yet.
+                wandrWarnOnce("render: .image contents .\(String(describing: graphicsImage.contents)) not a decodable bitmap — dropped")
+                break
+            }
+            sink.drawImage(
+                data: [UInt8](cgImage.encodedData),
+                name: "\(ObjectIdentifier(cgImage))",
+                pixelWidth: cgImage.width, pixelHeight: cgImage.height,
+                x: Double(frame.minX), y: Double(frame.minY),
+                width: Double(frame.width), height: Double(frame.height),
+                opacity: opacity
+            )
         default:
-            // TODO: image, shadow, backdrop, view, platform* — grow WandrDrawSink.
+            // TODO: shadow, backdrop, view, platform* — grow WandrDrawSink.
             wandrWarnOnce("render: dropped content .\(wandrContentName(content.value))")
         }
     }
