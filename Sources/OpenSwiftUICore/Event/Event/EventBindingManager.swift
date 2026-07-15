@@ -218,10 +218,29 @@ final public class EventBindingManager {
                 // Materialize the container; `isValid` is false until it exists (created lazily).
                 _ = gesture.gestureContainer
                 let frame = gesture.hitFrame
+                // [wandr] `frame` is the gesture's LOCAL layout rect. Under an `.offset`/GeometryEffect
+                // the descendant's layout `position` is reset to zero and the placement lives in
+                // `viewTransform` instead — so map the global hit `point` into that local space before
+                // testing containment. Use `.localToSpace(.global)` (NOT `.spaceToLocal`): the
+                // GeometryEffect appends its effect with `inverse: true`, so `viewTransform` already
+                // encodes the global→local orientation — this matches the canonical
+                // `GeometryProxy.convert(globalPoint:to:)` (GeometryReader.swift). No-op for identity
+                // transforms, so plain (un-transformed) gestures are unaffected.
+                let localPoint = gesture.viewTransform.convert(.localToSpace(.global), point: point)
+                // [wandr] Content-shape hit region: SwiftUI hit-tests where content is actually
+                // DRAWN, not the full layout frame. Restrict `frame` to the content's drawn bounds
+                // when known (e.g. a board centered in a greedy GeometryReader is hittable only over
+                // the board, not the transparent padding). Fall back to `frame` when there is no
+                // display content or the intersection is empty (defensive).
+                let hitRegion: CGRect = {
+                    guard let cb = gesture.contentBounds else { return frame }
+                    let r = frame.intersection(cb)
+                    return (r.isNull || r.isEmpty) ? frame : r
+                }()
                 // Skip gestures whose subtree has `.allowsHitTesting(false)` (an open overlay
                 // disabling the background it covers) so they don't intercept events.
-                if gesture.isValid, gesture.hitTestable, frame.contains(point) {
-                    let area = frame.width * frame.height
+                if gesture.isValid, gesture.hitTestable, hitRegion.contains(localPoint) {
+                    let area = hitRegion.width * hitRegion.height
                     if smallest == nil || area < smallest!.area {
                         smallest = (node, area)
                     }

@@ -72,6 +72,8 @@ extension GestureViewModifier {
                 position: inputs.animatedPosition(),
                 size: inputs.animatedCGSize(),
                 hitTestable: inputs.allowsHitTesting,
+                transform: inputs.transform,
+                contentDisplayList: OptionalAttribute(outputs.preferences.displayList),
                 inputs: inputs,
                 viewSubgraph: .current!
             )
@@ -167,6 +169,18 @@ package protocol AnyGestureResponder: AnyGestureContainingResponder {
     // [wandr] False when `.allowsHitTesting(false)` covers this gesture's subtree — bindResponders
     // then skips it, so an open overlay's background stops intercepting events.
     var hitTestable: Bool { get }
+
+    // [wandr] The transform mapping this gesture's LOCAL space (in which `hitFrame` is expressed)
+    // to global. `.offset`/`.scaleEffect`/etc. are GeometryEffects that reset the descendant's
+    // layout `position` to zero and carry the placement here instead — so `hitFrame` alone is the
+    // un-offset local rect. bindResponders inverse-maps the global hit point through this before
+    // testing `hitFrame.contains`.
+    var viewTransform: ViewTransform { get }
+
+    // [wandr] Content-shape hit region (drawn DisplayList bounds), in the same local space as
+    // `hitFrame`. When present, hit-testing uses this ∩ `hitFrame` so the gesture only fires over
+    // actually-drawn content (matching SwiftUI); `nil` falls back to `hitFrame`.
+    var contentBounds: CGRect? { get }
 
     var childSubgraph: Subgraph? { get set }
 
@@ -320,6 +334,18 @@ private class GestureResponder<Modifier>: DefaultLayoutViewResponder, AnyGesture
     // [wandr] Whether this gesture participates in hit-testing (driven by `.allowsHitTesting`).
     var hitTestable: Bool = true
 
+    // [wandr] Local→global transform kept in sync by GestureFilter (from `inputs.transform`). Under
+    // an `.offset`/GeometryEffect the layout `position` is reset to zero and the offset lives here,
+    // so a global hit point must be inverse-mapped through this before testing the local `hitFrame`.
+    var viewTransform: ViewTransform = ViewTransform()
+
+    // [wandr] Content-shape hit region: the union of the gesture content's DRAWN DisplayList item
+    // frames (in the same local space as `hitFrame`). SwiftUI hit-tests where content is actually
+    // drawn, not the full layout frame — e.g. a board centered in a greedy GeometryReader is only
+    // hittable over the board, not the transparent padding. `nil` = no display content yet; fall
+    // back to `hitFrame`. Kept in sync by GestureFilter.
+    var contentBounds: CGRect? = nil
+
     init(modifier: Attribute<Modifier>, inputs: _ViewInputs) {
         self.modifier = modifier
         super.init(inputs: inputs)
@@ -383,10 +409,19 @@ private class GestureResponder<Modifier>: DefaultLayoutViewResponder, AnyGesture
         options: ViewResponder.ContainsPointsOptions
     ) -> ViewResponder.ContainsPointsResult {
         let result = super.containsGlobalPoints(points, cacheKey: cacheKey, options: options)
-        // [wandr] Approach A: hit-test against this gesture's OWN layout frame (covers any content
-        // view type), unioned with any nested gesture descendants' masks.
+        // [wandr] Hit-test against this gesture's drawn content region: `hitFrame` restricted to the
+        // content's drawn bounds (`contentBounds`) when known — SwiftUI hit-tests where content
+        // actually draws, not the full layout frame. Each global point is inverse-mapped into this
+        // gesture's local space (where `hitFrame`/`contentBounds` live) so `.offset`/GeometryEffect is
+        // honored. Falls back to `hitFrame`. Matches EventBindingManager.bindResponders.
+        let hitRegion: CGRect = {
+            guard let cb = contentBounds else { return hitFrame }
+            let r = hitFrame.intersection(cb)
+            return (r.isNull || r.isEmpty) ? hitFrame : r
+        }()
         var mask = result.mask
-        for index in points.indices where hitFrame.contains(points[index]) {
+        for index in points.indices
+        where hitRegion.contains(viewTransform.convert(.localToSpace(.global), point: points[index])) {
             mask[index] = true
         }
         // Bind to THIS gesture (ViewGraph.sendEvents needs an AnyGestureResponder), not content
@@ -533,6 +568,15 @@ private struct GestureFilter<Modifier>: StatefulRule where Modifier: GestureView
     // background it covers instead of the background stealing events.
     @Attribute var hitTestable: Bool
 
+    // [wandr] The local→global transform (`.offset`/`.scaleEffect`/… GeometryEffects). Kept on the
+    // responder so hit-testing can inverse-map the global point into the space `hitFrame` lives in.
+    @Attribute var transform: ViewTransform
+
+    // [wandr] The gesture content's DisplayList (present when the content draws). Its item frames —
+    // unioned — give the drawn content bounds, used to restrict the hit region to actually-drawn
+    // content (content-shape hit-testing), instead of the full layout `hitFrame`.
+    @OptionalAttribute var contentDisplayList: DisplayList?
+
     var inputs: _ViewInputs
 
     var viewSubgraph: Subgraph
@@ -554,10 +598,34 @@ private struct GestureFilter<Modifier>: StatefulRule where Modifier: GestureView
         }
         responder.hitFrame = CGRect(origin: position, size: size)
         responder.hitTestable = hitTestable
+        responder.viewTransform = transform
+        if let list = contentDisplayList {
+            let bounds = wandrDisplayListDrawnBounds(list)
+            responder.contentBounds = bounds.isNull || bounds.isEmpty ? nil : bounds
+        } else {
+            responder.contentBounds = nil
+        }
         if !hasValue {
             value = [self.responder]
         }
     }
+}
+
+// [wandr] Union of a DisplayList's DRAWN item frames — the content-shape bounds used to restrict a
+// gesture's hit region to where content actually draws (see GestureResponder.contentBounds). Each
+// `Item.frame` is already expressed in THIS list's coordinate space and already bounds that item's
+// (possibly transformed/positioned) content — which is the same space as GestureResponder.hitFrame.
+// So we union only the top-level item frames and do NOT recurse into `.effect`/`.states` sublists:
+// those sublists are in the item's own PRE-transform space (e.g. a `.position`-ed board's children
+// sit at the un-centered origin), and mixing them in would wrongly stretch the bounds back to (0,0).
+// `.empty` items draw nothing and are skipped.
+private func wandrDisplayListDrawnBounds(_ list: DisplayList) -> CGRect {
+    var bounds = CGRect.null
+    for item in list.items {
+        if case .empty = item.value { continue }
+        bounds = bounds.union(item.frame)
+    }
+    return bounds
 }
 
 // MARK: - EmptyGestureAccessibilityProvider
