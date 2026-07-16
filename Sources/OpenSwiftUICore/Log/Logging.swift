@@ -321,7 +321,10 @@ package func _openSwiftUIPlatformUnimplementedFailure(_ function: String = #func
 @_transparent
 package func _openSwiftUIUnimplementedWarning(_ function: String = #function, file: StaticString = #fileID, line: UInt = #line) {
     #if DEBUG
-    Log.development.warning("\(file):\(line): Warning: \(function) is unimplemented")
+    // [wandr] Deduped like _openSwiftUIEmptyStub above — this fires from hot paths (e.g. every
+    // Text layout), and Log.development.warning's per-call formatting + syscall cost measurably
+    // hurt frame time when called unthrottled dozens of times/frame during animation.
+    wandrWarnOnce("\(file):\(line): Warning: \(function) is unimplemented")
     #if OPENSWIFTUI_DEVELOPMENT
     _openSwiftUIUnimplementedFailure(function, file: file, line: line)
     #endif
@@ -331,7 +334,7 @@ package func _openSwiftUIUnimplementedWarning(_ function: String = #function, fi
 @_transparent
 package func _openSwiftUIPlatformUnimplementedWarning(_ function: String = #function, file: StaticString = #fileID, line: UInt = #line) {
     #if DEBUG
-    Log.development.warning("\(file):\(line): Warning: \(function) is unimplemented on this platform")
+    wandrWarnOnce("\(file):\(line): Warning: \(function) is unimplemented on this platform")
     #if OPENSWIFTUI_DEVELOPMENT
     _openSwiftUIPlatformUnimplementedFailure(function, file: file, line: line)
     #endif
