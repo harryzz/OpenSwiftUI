@@ -114,11 +114,9 @@ private final class AppStorageRegistry: @unchecked Sendable {
         // First access for this key this run — try disk before falling back to defaultValue.
         if !hydratedKeys.contains(key) {
             hydratedKeys.insert(key)
-            if let persistableType = T.self as? any AppStoragePersistable.Type,
-               let raw = AppStoragePersistence.read(key: key),
-               let decoded = persistableType.init(persistedStringValue: raw) as? T {
-                values[key] = decoded
-                return decoded
+            if let raw = UserDefaultsStore.standard.object(forKey: key) as? T {
+                values[key] = raw
+                return raw
             }
         }
         return defaultValue
@@ -127,9 +125,7 @@ private final class AppStorageRegistry: @unchecked Sendable {
     func set<T>(_ value: T, for key: String) {
         values[key] = value
         hydratedKeys.insert(key)
-        if let persistable = value as? any AppStoragePersistable {
-            AppStoragePersistence.write(key: key, value: persistable.persistedStringValue)
-        }
+        UserDefaultsStore.standard.set(value, forKey: key)
         guard let observers = signals[key], !observers.isEmpty else { return }
         // Mirrors StoredLocationBase.set()'s own safety pattern: defer the actual graph
         // invalidation via onMainThread rather than firing it synchronously inline with the write.
@@ -149,56 +145,86 @@ private final class AppStorageRegistry: @unchecked Sendable {
     }
 }
 
-// MARK: - Persistence
+// MARK: - UserDefaultsStore
 
-/// The primitive types Apple's real AppStorage supports natively (Bool/Int/Double/String — RawRepresentable,
-/// URL, and Data are not needed by any current wandr guest and are left out rather than guessed at).
-private protocol AppStoragePersistable {
-    var persistedStringValue: String { get }
-    init?(persistedStringValue: String)
-}
+/// The real, shared persistence engine `@AppStorage` uses — and, via apple-compat's `UserDefaults`
+/// shim (which delegates here), so does plain `UserDefaults` — matching Apple's own actual
+/// relationship between the two (real `@AppStorage` is a thin reactive wrapper OVER
+/// `UserDefaults`, not a separate store). One real XML plist file per SUITE (not per key) under
+/// `/state` — `/state/<suite>.plist` — matching how real `UserDefaults` actually persists (one
+/// domain = one plist), a universal wandr convention (every guest gets a read-write `/state` dir
+/// regardless of which renderer path it runs through).
+public final class UserDefaultsStore: @unchecked Sendable {
+    public static let standard = UserDefaultsStore(suiteName: "standard")
 
-extension Bool: AppStoragePersistable {
-    var persistedStringValue: String { self ? "1" : "0" }
-    init?(persistedStringValue: String) { self = persistedStringValue == "1" }
-}
+    nonisolated(unsafe) private static var suites: [String: UserDefaultsStore] = [:]
 
-extension Int: AppStoragePersistable {
-    var persistedStringValue: String { String(self) }
-    init?(persistedStringValue: String) { self.init(persistedStringValue) }
-}
+    public static func suite(_ name: String) -> UserDefaultsStore {
+        if let existing = suites[name] { return existing }
+        let store = UserDefaultsStore(suiteName: name)
+        suites[name] = store
+        return store
+    }
 
-extension Double: AppStoragePersistable {
-    var persistedStringValue: String { String(self) }
-    init?(persistedStringValue: String) { self.init(persistedStringValue) }
-}
+    private let suiteName: String
+    private var cache: [String: Any]?
 
-extension String: AppStoragePersistable {
-    var persistedStringValue: String { self }
-    init?(persistedStringValue: String) { self = persistedStringValue }
-}
+    private init(suiteName: String) {
+        self.suiteName = suiteName
+    }
 
-/// Same minimal POSIX read/write style as WandrBoardSizeStore/WandrPlist — plain files under the
-/// app's `/state` preopen (a universal wandr convention, not per-app config: every guest gets a
-/// read-write `/state` dir regardless of which renderer path it runs through).
-private enum AppStoragePersistence {
-    static func read(key: String) -> String? {
-        guard let file = fopen(path(for: key), "rb") else { return nil }
+    private var path: String { "/state/\(suiteName).plist" }
+
+    private func load() -> [String: Any] {
+        if let cache { return cache }
+        guard let file = fopen(path, "rb") else {
+            cache = [:]
+            return [:]
+        }
         defer { fclose(file) }
-        var buffer = [UInt8](repeating: 0, count: 256)
-        let n = buffer.withUnsafeMutableBytes { fread($0.baseAddress, 1, $0.count, file) }
-        guard n > 0, let s = String(bytes: buffer[0..<n], encoding: .utf8) else { return nil }
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        while true {
+            let read = buffer.withUnsafeMutableBytes { fread($0.baseAddress, 1, $0.count, file) }
+            if read <= 0 { break }
+            data.append(contentsOf: buffer[0..<read])
+        }
+        let dict = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any]
+        let result = dict ?? [:]
+        cache = result
+        return result
     }
 
-    static func write(key: String, value: String) {
-        guard let file = fopen(path(for: key), "wb") else { return }
+    private func save(_ dict: [String: Any]) {
+        cache = dict
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0) else {
+            return
+        }
+        guard let file = fopen(path, "wb") else { return }
         defer { fclose(file) }
-        _ = value.withCString { fwrite($0, 1, strlen($0), file) }
+        data.withUnsafeBytes { buf in
+            _ = fwrite(buf.baseAddress, 1, buf.count, file)
+        }
     }
 
-    private static func path(for key: String) -> String {
-        "/state/appstorage-\(key)"
+    public func object(forKey key: String) -> Any? { load()[key] }
+
+    public func set(_ value: Any?, forKey key: String) {
+        var dict = load()
+        dict[key] = value
+        save(dict)
     }
+
+    public func removeObject(forKey key: String) {
+        var dict = load()
+        dict.removeValue(forKey: key)
+        save(dict)
+    }
+
+    public func integer(forKey key: String) -> Int { (load()[key] as? Int) ?? 0 }
+    public func bool(forKey key: String) -> Bool { (load()[key] as? Bool) ?? false }
+    public func double(forKey key: String) -> Double { (load()[key] as? Double) ?? 0 }
+    public func float(forKey key: String) -> Float { (load()[key] as? Float) ?? 0 }
+    public func string(forKey key: String) -> String? { load()[key] as? String }
 }
 #endif
