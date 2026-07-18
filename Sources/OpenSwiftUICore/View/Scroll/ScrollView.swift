@@ -23,6 +23,8 @@ import Foundation
 // so both see the same value — the platform has no `onPreferenceChange` to bubble it up via @State.
 private final class ScrollMetrics {
     var maxOffset: CGFloat = 0
+    var viewportHeight: CGFloat = 0
+    var contentHeight: CGFloat = 0
 }
 
 /// A scrollable view.
@@ -62,6 +64,9 @@ public struct ScrollView<Content>: View where Content: View {
         // bounds to the whole viewport → the scroll gesture is a candidate everywhere in its area.
         .background { Color.clear }
         .clipped()
+        // Scroll indicator (thin thumb on the trailing edge, sized by viewport/content, positioned by
+        // the scroll fraction). Drawn on top of the clipped content; non-interactive.
+        .overlay(alignment: .topTrailing) { scrollIndicator }
         // High-priority so the scroll pan wins arbitration over an ANCESTOR `.gesture` that wraps the
         // scroll view (e.g. a swipe-to-move gesture on a container that also hosts this list). In this
         // port the responder tree is flat (gesture nesting isn't preserved), so ancestor/descendant
@@ -75,6 +80,25 @@ public struct ScrollView<Content>: View where Content: View {
                     live = 0
                 }
         )
+    }
+
+    /// The trailing scroll thumb. Only shown when the content overflows; sized by the viewport/content
+    /// ratio and positioned by how far we're scrolled (0 = top, maxOffset = bottom).
+    @ViewBuilder private var scrollIndicator: some View {
+        let vp = metrics.viewportHeight
+        let content = metrics.contentHeight
+        let maxOff = metrics.maxOffset
+        if maxOff > 0.5, vp > 0, content > vp {
+            let scrollAmount = min(max(offset - live, 0), maxOff)
+            let fraction = scrollAmount / maxOff
+            let thumbHeight = max(28, vp * (vp / content))
+            let travel = max(0, vp - thumbHeight)
+            Capsule()
+                .fill(Color(red: 0.5, green: 0.5, blue: 0.5, opacity: 0.35))
+                .frame(width: 3, height: thumbHeight)
+                .padding(.trailing, 2)
+                .offset(y: fraction * travel)
+        }
     }
 }
 
@@ -95,6 +119,8 @@ private struct ScrollContentLayout: Layout {
         let contentHeight = content.dimensions(in: ProposedViewSize(width: bounds.width, height: nil)).height
         let maxOffset = max(0, contentHeight - bounds.height)
         metrics.maxOffset = maxOffset
+        metrics.viewportHeight = bounds.height
+        metrics.contentHeight = contentHeight
         // Clamp the display offset to [-maxOffset, 0]: 0 = top, -maxOffset = bottom, no overscroll.
         let y = min(max(displayOffset, -maxOffset), 0)
         content.place(
