@@ -154,6 +154,14 @@ extension App {
         let app = Self()
         /* OpenSwiftUI Addition Begin */
         #if !OPENSWIFTUI_SWIFTUI_RENDERER
+        // [wandr] Reactor mode: wandr-runtime armed us immediately before invoking this @main entry
+        // (there is no _start under -mexec-model=reactor, so it calls __main_argc_argv itself). Register
+        // the app and RETURN — the host owns the run loop and drives frames via exported callbacks, so
+        // main() must not run-to-completion or exit. Lets an unmodified `@main struct App` boot on wandr.
+        if _wandrReactorArmed {
+            registerWandrApp(app)
+            return
+        }
         if let rendererConfiguration = Self.rendererConfiguration,
            case let .stdout(options) = rendererConfiguration.renderer {
             runStdoutApp(app, options: options)

@@ -156,4 +156,40 @@ public func wandrRenderFrame(_ interval: Double) -> Bool {
 public func wandrSendPointer(phase: Int, x: Double, y: Double, serial: Int) {
     _wandrSendEvent?(phase, x, y, serial)
 }
+
+// MARK: - Reactor app registration (eleev's @main App, used VERBATIM)
+//
+// A wandr guest is a wasip1 REACTOR (-mexec-model=reactor): there is no _start, so the app's
+// @main-generated entry (__main_argc_argv) is never auto-called. wandr-runtime's `on-init` invokes
+// it explicitly (via @_silgen_name), which runs `App.main()`. But main() must NOT run-to-completion
+// or exit — the host keeps the instance alive and drives frames via exported callbacks. So, when the
+// wandr reactor is "armed" (wandr-runtime sets this immediately before calling the entry), App.main()
+// registers the app HERE and RETURNS; wandr-runtime then builds + drives it on the first real-sized
+// frame with its own wasi:canvas-backed sink. Net effect: the app carries only `@main struct App`,
+// exactly as on Apple platforms — zero wandr code in the app target.
+nonisolated(unsafe) var _wandrReactorArmed = false
+nonisolated(unsafe) private var _wandrAppLauncher: ((_RendererConfiguration.WandrOptions) -> Void)?
+
+/// wandr-runtime calls this immediately before invoking the @main entry, so `App.main()` takes the
+/// register-and-return path instead of the stdout / run-to-completion one.
+@_spi(WandrRenderer)
+public func armWandrReactor() { _wandrReactorArmed = true }
+
+/// Store the @main app until wandr-runtime's first sized frame builds its graph. Called from
+/// `App.main()`'s reactor branch, capturing the concrete app type (`renderWandrAppOnce` stays generic).
+@_spi(WandrRenderer)
+public func registerWandrApp(_ app: some App) {
+    _wandrAppLauncher = { options in renderWandrAppOnce(app, options: options) }
+}
+
+/// Build + render the registered app once. wandr-runtime calls this on the first real-sized frame,
+/// supplying its wasi:canvas-backed sink + surface. Returns `false` if no app was registered (e.g.
+/// the entry was never called, or the app didn't take the reactor path).
+@_spi(WandrRenderer)
+@discardableResult
+public func launchRegisteredWandrApp(options: _RendererConfiguration.WandrOptions) -> Bool {
+    guard let launcher = _wandrAppLauncher else { return false }
+    launcher(options)
+    return true
+}
 #endif
