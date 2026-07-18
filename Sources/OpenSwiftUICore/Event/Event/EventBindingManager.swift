@@ -6,7 +6,6 @@
 //  ID: D63F4C292364B83D9F441CFC1A31B3F3 (SwiftUICore)
 
 import Foundation
-
 // MARK: - EventBindingManager [6.5.4] [WIP]
 
 @_spi(ForOpenSwiftUIOnly)
@@ -211,7 +210,7 @@ final public class EventBindingManager {
             return []
         }
         let point = hitEvent.hitTestLocation
-        var smallest: (node: ResponderNode, area: CGFloat)?
+        var smallest: (node: ResponderNode, area: CGFloat, priority: Int)?
         var smallestTap: (node: ResponderNode, area: CGFloat)?
         root.visit { node in
             if let gesture = node as? any AnyGestureResponder {
@@ -241,8 +240,22 @@ final public class EventBindingManager {
                 // disabling the background it covers) so they don't intercept events.
                 if gesture.isValid, gesture.hitTestable, hitRegion.contains(localPoint) {
                     let area = hitRegion.width * hitRegion.height
-                    if smallest == nil || area < smallest!.area {
-                        smallest = (node, area)
+                    // [wandr] Gesture PRIORITY is the primary key; area is the tie-break among equal
+                    // priority. `.highPriorityGesture` (exclusionPolicy `.highPriority`) therefore wins
+                    // over lower-priority overlapping gestures REGARDLESS of area — that's the point of
+                    // high priority, and it's how a scroll pan beats an ANCESTOR `.gesture` that wraps it
+                    // even when the ancestor's DRAWN hit region is smaller. (Ancestor/descendant depth
+                    // can't decide it here: the responder tree is flat — parent/nextResponder is never
+                    // wired.) With every gesture at `.default` the priority test is a no-op and the old
+                    // tightest-region behavior is byte-identical. `smallestTap` below stays purely
+                    // area-based, so a TAP still binds the tightest button/toggle and is co-delivered
+                    // alongside the scroll — a tap toggles, a drag scrolls (each self-arbitrates by
+                    // movement).
+                    let priority = (gesture.exclusionPolicy == .highPriority) ? 1 : 0
+                    if smallest == nil
+                        || priority > smallest!.priority
+                        || (priority == smallest!.priority && area < smallest!.area) {
+                        smallest = (node, area, priority)
                     }
                     if gesture.producesVoidValue, smallestTap == nil || area < smallestTap!.area {
                         smallestTap = (node, area)
