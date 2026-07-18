@@ -229,6 +229,16 @@ var sharedSwiftSettings: [SwiftSetting] = [
 
     .define("OPENSWIFTUI_RELEASE_\(releaseVersion)"),
     .unsafeFlags(["-Xfrontend", "-experimental-spi-only-imports"]),
+    // [wandr] Force -Onone for OpenSwiftUI's own modules to dodge a Swift compiler bug that only
+    // strikes at -O: the CrossModuleOptimization SIL pass crashes on OpenSwiftUICore/StyleContext's
+    // parameter-pack (`each Q`) protocol conformances ("Abstract conformance with bad subject type" /
+    // forAbstract at ASTContext.cpp:5924, Swift 6.3.2/6.3.3; 6.5-dev fixes that but then default CMO
+    // trips a pervasive @_alwaysEmitIntoClient serialization verifier bug). Default CMO can't be
+    // disabled by flag (SwiftPM force-appends -enable-default-cmo, which -disable-cmo doesn't cancel),
+    // so -Onone (which lands after SwiftPM's -O and wins) is the deterministic lever. The heavy
+    // per-frame hot path — Compute/AttributeGraph, a SEPARATE package — stays fully -O; only this
+    // view layer is unoptimized. Remove once a toolchain builds this stack cleanly at -O.
+    .unsafeFlags(["-Onone"]),
 ]
 
 if releaseVersion >= 2021 {
