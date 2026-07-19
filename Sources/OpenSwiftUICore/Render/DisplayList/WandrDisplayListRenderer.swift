@@ -65,10 +65,37 @@ private func wandrSVGPath(_ path: Path, applying t: CGAffineTransform) -> String
     case let .ellipse(r):
         // An inscribed ellipse == a rounded rect whose corner radii are half the sides.
         return wandrRoundedRectSVG(r, corner: CGSize(width: r.width / 2, height: r.height / 2), applying: t)
+    #if !canImport(CoreGraphics)
+    case let .wandrElements(elements):
+        // Custom paths (a Shape building its own path element-by-element, plus stroked outlines).
+        return wandrElementsSVG(elements, applying: t)
+    #endif
     default:
         let b = path.boundingRect
         return wandrRoundedRectSVG(b, corner: .zero, applying: t)
     }
+}
+
+// [wandr] SVG path-data for an arbitrary element buffer (custom Shapes / stroked outlines), each
+// point mapped through `t`. Cubic/quadratic Béziers pass straight through to SVG C/Q.
+private func wandrElementsSVG(_ elements: [Path.Element], applying t: CGAffineTransform) -> String {
+    func P(_ p: CGPoint) -> CGPoint { p.applying(t) }
+    var s = ""
+    for element in elements {
+        switch element {
+        case let .move(to: p):
+            let q = P(p); s += "M \(q.x) \(q.y) "
+        case let .line(to: p):
+            let q = P(p); s += "L \(q.x) \(q.y) "
+        case let .quadCurve(to: p, control: c):
+            let q = P(p), cc = P(c); s += "Q \(cc.x) \(cc.y) \(q.x) \(q.y) "
+        case let .curve(to: p, control1: c1, control2: c2):
+            let q = P(p), a = P(c1), b = P(c2); s += "C \(a.x) \(a.y) \(b.x) \(b.y) \(q.x) \(q.y) "
+        case .closeSubpath:
+            s += "Z "
+        }
+    }
+    return s
 }
 
 // [wandr] SVG for a rect with (possibly zero) uniform corner radii, each point mapped through `t`.
@@ -220,7 +247,30 @@ private struct WandrSinkVisitor {
             // glyph to the laid-out rect here. The content rule can't do this — reading the
             // resolved size there cycles the AttributeGraph — so the sizing lands at draw time.
             let fill = textView.wasmSymbolFill
-            let drawFontSize = fill ? Double(min(frame.width, frame.height)) : Double(textView.wasmFontSize)
+            // [wandr] `.minimumScaleFactor` shrink-to-fit: when shrinking is allowed (factor < 1) and
+            // the fixed font is bigger than the laid-out box, clamp the drawn font DOWN so the glyph
+            // fits (bounded below by factor × requested size). Covers a card's oversized emoji
+            // (`.font(.system(size: 200)).minimumScaleFactor(0.05)`) overflowing its bounds.
+            // [wandr] `.minimumScaleFactor` shrink-to-fit. The LAYOUT already applied the scale (see
+            // StyledTextContentView.sizeThatFits), so recover it from how constrained the laid-out
+            // frame is versus the text's NATURAL size — text that fits its frame keeps scale 1 and is
+            // drawn at its requested size. (Deriving from min(width,height) instead would wrongly
+            // shrink narrow single-character text, e.g. a calculator's "0".)
+            var textFontSize = Double(textView.wasmFontSize)
+            if !fill, textView.wasmMinScaleFactor < 1 {
+                // Same natural-size estimate the layout used (character-aware widths — an emoji is
+                // ~full-em, not 0.6em), so the recovered scale matches the frame the layout produced.
+                let natural = textView.wasmEstimatedSize
+                let naturalW = Double(natural.width)
+                let naturalH = Double(natural.height)
+                var scale = 1.0
+                if naturalW > 0 { scale = min(scale, Double(frame.width) / naturalW) }
+                if naturalH > 0 { scale = min(scale, Double(frame.height) / naturalH) }
+                scale = max(scale, Double(textView.wasmMinScaleFactor))
+                if scale < 1 { textFontSize = Double(textView.wasmFontSize) * scale }
+            }
+            let drawFontSize = fill ? Double(min(frame.width, frame.height)) : textFontSize
+            let textY = Double(frame.minY)
             // [wandr] `width` is the host paragraph's maxWidth (governs WRAPPING only; the paint
             // stays left-aligned at `x`). OpenSwiftUI underestimates a word's measured width on wasm
             // (host/Skia renders ~a glyph wider), so a tight box wrapped labels like "SCORE" →
@@ -235,7 +285,7 @@ private struct WandrSinkVisitor {
                 : (isSingleWord ? Double(frame.width) + 100_000 : Double(frame.width) * 1.2)
             sink.drawText(
                 textView.wasmPlainString,
-                x: Double(frame.minX), y: Double(frame.minY),
+                x: Double(frame.minX), y: textY,
                 width: drawWidth, height: Double(frame.height),
                 fontSize: drawFontSize,
                 red: c?.red ?? 1.0, green: c?.green ?? 1.0, blue: c?.blue ?? 1.0,
@@ -338,6 +388,21 @@ private struct WandrSinkVisitor {
         transform: CGAffineTransform,
         opacity: Float
     ) {
+        // [wandr] Flat 3D rotation with no real perspective (m13≈m23≈0) — a `rotation3DEffect` card
+        // flip. Its 2D image mirrors/scales the content about the content's LOCAL origin (top-left):
+        // the anchor-center pivot isn't carried in `pt` here, so a flip past edge-on displaces the
+        // card OFF its position (negative coords → off-screen; a face-down card vanishes). The flipped
+        // face is either hidden by the app's opacity toggle or a symmetric back, so render it IN PLACE
+        // (skip the displacing mirror). A pure-identity rotation (0°) still takes the affine fast-path.
+        if abs(pt.m13) < 1e-6, abs(pt.m23) < 1e-6 {
+            let w = (pt.m33 == 0) ? 1 : pt.m33
+            let a = pt.m11 / w, b = pt.m12 / w, c = pt.m21 / w, d = pt.m22 / w
+            let isFlipOrShrinkOrRotate = a < 0.999 || d < 0.999 || abs(b) > 1e-3 || abs(c) > 1e-3
+            if isFlipOrShrinkOrRotate {
+                append(list: list, transform: transform, opacity: opacity)
+                return
+            }
+        }
         if pt.isAffine {
             let affine = CGAffineTransform(a: pt.m11, b: pt.m12, c: pt.m21, d: pt.m22, tx: pt.m31, ty: pt.m32)
             append(list: list, transform: transform.concatenating(affine), opacity: opacity)

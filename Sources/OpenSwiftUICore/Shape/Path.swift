@@ -207,6 +207,11 @@ public struct Path: Equatable, LosslessStringConvertible, @unchecked Sendable {
         @available(*, deprecated, message: "obsolete")
         indirect case trimmed(TrimmedPath)
         case path(PathBox)
+        #if !canImport(CoreGraphics)
+        /// [wandr] Pure-Swift element buffer backing custom Path construction (move/line/curve/arc)
+        /// where ORBPath/CGPath are unimplemented (WASI). See Path+WandrElements.swift.
+        case wandrElements([Element])
+        #endif
     }
 
     package var storage: Path.Storage
@@ -462,6 +467,12 @@ public struct Path: Equatable, LosslessStringConvertible, @unchecked Sendable {
             _openSwiftUIUnreachableCode()
         case let .path(pathBox):
             pathBox.retainRBPath()
+        #if !canImport(CoreGraphics)
+        case .wandrElements:
+            // The wandr renderer consumes .wandrElements via Path.storage directly (wandrSVGPath),
+            // never through ORBPath — so this ORBPath bridge is unreachable off-Apple.
+            _openSwiftUIUnreachableCode()
+        #endif
         }
     }
 
@@ -484,6 +495,10 @@ public struct Path: Equatable, LosslessStringConvertible, @unchecked Sendable {
             _openSwiftUIUnreachableCode()
         case let .path(pathBox):
             pathBox.rbPath.isEmpty
+        #if !canImport(CoreGraphics)
+        case let .wandrElements(elements):
+            elements.isEmpty
+        #endif
         }
     }
 
@@ -506,6 +521,10 @@ public struct Path: Equatable, LosslessStringConvertible, @unchecked Sendable {
             _openSwiftUIUnreachableCode()
         case let .path(pathBox):
             pathBox.boundingRect
+        #if !canImport(CoreGraphics)
+        case let .wandrElements(elements):
+            Path.wandrBounds(elements)
+        #endif
         }
     }
 
@@ -553,13 +572,24 @@ public struct Path: Equatable, LosslessStringConvertible, @unchecked Sendable {
 
     /// Calls `body` with each element in the path.
     public func forEach(_ body: (Path.Element) -> Void) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        for element in wandrElementList { body(element) }
+        #endif
     }
 
     /// Returns a stroked copy of the path using `style` to define how the
     /// stroked outline is created.
     public func strokedPath(_ style: StrokeStyle) -> Path {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        // The wandr renderer only fills, so return the stroke as a fillable outline region.
+        var result = Path()
+        result.storage = .wandrElements(Path.wandrStrokeOutline(wandrElementList, width: style.lineWidth))
+        return result
+        #endif
     }
 
     /// Returns a partial copy of the path.
@@ -665,18 +695,30 @@ extension TrimmedPath: Sendable {}
 @available(OpenSwiftUI_v1_0, *)
 extension Path {
     public mutating func move(to end: CGPoint) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend([.move(to: end)])
+        #endif
     }
 
     public mutating func addLine(to end: CGPoint) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend([.line(to: end)])
+        #endif
     }
 
     public mutating func addQuadCurve(
         to end: CGPoint,
         control: CGPoint
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend([.quadCurve(to: end, control: control)])
+        #endif
     }
 
     public mutating func addCurve(
@@ -684,18 +726,30 @@ extension Path {
         control1: CGPoint,
         control2: CGPoint
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend([.curve(to: end, control1: control1, control2: control2)])
+        #endif
     }
 
     public mutating func closeSubpath() {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend([.closeSubpath])
+        #endif
     }
 
     public mutating func addRect(
         _ rect: CGRect,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend(Path.wandrTransform(Path.wandrRectElements(rect), transform))
+        #endif
     }
 
     public mutating func addRoundedRect(
@@ -704,7 +758,11 @@ extension Path {
         style: RoundedCornerStyle = .continuous,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend(Path.wandrTransform(Path.wandrRoundedRectElements(rect, cornerSize: cornerSize), transform))
+        #endif
     }
 
     @available(OpenSwiftUI_v4_0, *)
@@ -714,25 +772,46 @@ extension Path {
         style: RoundedCornerStyle = .continuous,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        // Uniform-corner approximation (per-corner radii not distinguished off-Apple).
+        let r = max(cornerRadii.topLeading, cornerRadii.topTrailing, cornerRadii.bottomLeading, cornerRadii.bottomTrailing)
+        wandrAppend(Path.wandrTransform(Path.wandrRoundedRectElements(rect, cornerSize: CGSize(width: r, height: r)), transform))
+        #endif
     }
 
     public mutating func addEllipse(
         in rect: CGRect,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend(Path.wandrTransform(Path.wandrEllipseElements(in: rect), transform))
+        #endif
     }
 
     public mutating func addRects(
         _ rects: [CGRect],
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend(Path.wandrTransform(rects.flatMap { Path.wandrRectElements($0) }, transform))
+        #endif
     }
 
     public mutating func addLines(_ lines: [CGPoint]) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        guard let first = lines.first else { return }
+        var elements: [Element] = [.move(to: first)]
+        elements.append(contentsOf: lines.dropFirst().map { .line(to: $0) })
+        wandrAppend(elements)
+        #endif
     }
 
     public mutating func addRelativeArc(
@@ -742,7 +821,16 @@ extension Path {
         delta: Angle,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        let els = Path.wandrArcElements(
+            center: center, radius: radius,
+            start: CGFloat(startAngle.radians), end: CGFloat(startAngle.radians + delta.radians),
+            clockwise: delta.radians < 0, from: wandrLastPoint
+        )
+        wandrAppend(Path.wandrTransform(els, transform))
+        #endif
     }
 
     public mutating func addArc(
@@ -753,7 +841,16 @@ extension Path {
         clockwise: Bool,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        let els = Path.wandrArcElements(
+            center: center, radius: radius,
+            start: CGFloat(startAngle.radians), end: CGFloat(endAngle.radians),
+            clockwise: clockwise, from: wandrLastPoint
+        )
+        wandrAppend(Path.wandrTransform(els, transform))
+        #endif
     }
 
     public mutating func addArc(
@@ -762,18 +859,31 @@ extension Path {
         radius: CGFloat,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        // Rarely used; approximate the fillet as straight lines through the tangent points.
+        wandrAppend(Path.wandrTransform([.line(to: tangent1End), .line(to: tangent2End)], transform))
+        #endif
     }
 
     public mutating func addPath(
         _ path: Path,
         transform: CGAffineTransform = .identity
     ) {
+        #if canImport(CoreGraphics)
         _openSwiftUIUnimplementedFailure()
+        #else
+        wandrAppend(Path.wandrTransform(path.wandrElementList, transform))
+        #endif
     }
 
     public var currentPoint: CGPoint? {
-        get { _openSwiftUIUnimplementedFailure() }
+        #if canImport(CoreGraphics)
+        _openSwiftUIUnimplementedFailure()
+        #else
+        wandrLastPoint
+        #endif
     }
 
     @available(OpenSwiftUI_v5_0, *)

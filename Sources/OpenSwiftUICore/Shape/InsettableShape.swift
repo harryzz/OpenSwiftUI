@@ -140,14 +140,28 @@ extension RoundedRectangle: InsettableShape {
 
         @usableFromInline
         nonisolated func path(in rect: CGRect) -> Path {
-            _openSwiftUIUnimplementedFailure()
+            // [wandr] An inset RoundedRectangle is a smaller RoundedRectangle: shrink the rect by
+            // `amount` on every edge and reduce the corner radius by the same (clamped ≥ 0), then
+            // reuse RoundedRectangle's own path builder. Needed for `.strokeBorder`/`.inset(by:)`
+            // (e.g. Cardify's card outline) — previously trapped at runtime.
+            let insetRect = CGRect(
+                x: rect.minX + amount,
+                y: rect.minY + amount,
+                width: max(0, rect.width - amount * 2),
+                height: max(0, rect.height - amount * 2)
+            )
+            let insetCorner = CGSize(
+                width: max(0, base.cornerSize.width - amount),
+                height: max(0, base.cornerSize.height - amount)
+            )
+            return RoundedRectangle(cornerSize: insetCorner, style: base.style).path(in: insetRect)
         }
 
         @usableFromInline
         nonisolated var layoutDirectionBehavior: LayoutDirectionBehavior {
             .fixed
         }
-        
+
         @usableFromInline
         var animatableData: AnimatablePair<RoundedRectangle.AnimatableData, CGFloat> {
             get { AnimatablePair(base.animatableData, amount) }

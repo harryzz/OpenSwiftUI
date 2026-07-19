@@ -151,6 +151,7 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
     package var wasmPlainString: String = ""
     package var wasmFontSize: CGFloat = 17
     package var wasmColor: Color.Resolved? = nil
+    package var wasmMinScaleFactor: CGFloat = 1
 
     package init(
         text: ResolvedStyledText,
@@ -159,7 +160,8 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
         needsDrawingGroup: Bool = false,
         wasmPlainString: String = "",
         wasmFontSize: CGFloat = 17,
-        wasmColor: Color.Resolved? = nil
+        wasmColor: Color.Resolved? = nil,
+        wasmMinScaleFactor: CGFloat = 1
     ) {
         self.text = text
         self.unresolvedText = unresolvedText
@@ -168,6 +170,7 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
         self.wasmPlainString = wasmPlainString
         self.wasmFontSize = wasmFontSize
         self.wasmColor = wasmColor
+        self.wasmMinScaleFactor = wasmMinScaleFactor
     }
 
     package var body: some View {
@@ -178,7 +181,8 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
                 needsDrawingGroup: needsDrawingGroup,
                 wasmPlainString: wasmPlainString,
                 wasmFontSize: wasmFontSize,
-                wasmColor: wasmColor
+                wasmColor: wasmColor,
+                wasmMinScaleFactor: wasmMinScaleFactor
             ),
             text: unresolvedText,
             resolved: text
@@ -208,7 +212,9 @@ extension Text {
 // the renderer (e.g. wasi:canvas paragraph / Skia) to shape + draw, with a coarse size estimate
 // for layout. The conformance is harmless on renderers that don't use it (Apple's glyph path).
 extension StyledTextContentView: RendererLeafView, LeafViewLayout {
-    private var wasmEstimatedSize: CGSize {
+    /// [wandr] Coarse natural (unscaled) size of this run. Shared with WandrDisplayListRenderer so
+    /// the drawn font's scale is derived from the SAME estimate the layout used.
+    package var wasmEstimatedSize: CGSize {
         // [wandr] A real bundle bitmap (task 114) sizes from its ACTUAL decoded pixel dimensions —
         // never text metrics. `wasmSymbolFill` below still governs fill-vs-intrinsic behavior (it's
         // reused for both a resizable SF Symbol and a `.resizable()` Image bitmap alike).
@@ -219,8 +225,15 @@ extension StyledTextContentView: RendererLeafView, LeafViewLayout {
             // Icon glyph: a ~square em box, so `scaledToFit` treats the symbol as square.
             return CGSize(width: wasmFontSize, height: wasmFontSize)
         }
+        // Latin/ASCII glyphs average ~0.6em wide, but emoji (and other non-Latin scripts) are
+        // roughly full-em — estimating those at 0.6em makes the run's box far too narrow, so a
+        // scaled-to-fit emoji overflows to the RIGHT of its frame.
+        var ems: CGFloat = 0
+        for character in wasmPlainString {
+            ems += character.isASCII ? 0.6 : 1.15
+        }
         return CGSize(
-            width: CGFloat(wasmPlainString.count) * wasmFontSize * 0.6,
+            width: ems * wasmFontSize,
             height: wasmFontSize * 1.35
         )
     }
@@ -248,7 +261,21 @@ extension StyledTextContentView: RendererLeafView, LeafViewLayout {
                 height: proposedSize.height ?? est.height
             )
         }
-        return wasmEstimatedSize
+        let est = wasmEstimatedSize
+        // [wandr] `.minimumScaleFactor`: when shrinking is allowed and the natural text is LARGER
+        // than what the parent proposed, scale down to fit (bounded by the factor) so the text stays
+        // inside its container instead of overflowing. Text that already fits is untouched (scale 1).
+        // WandrDisplayListRenderer derives the same scale from frame-vs-natural to pick the drawn font.
+        if wasmMinScaleFactor < 1 {
+            var scale: CGFloat = 1
+            if let pw = proposedSize.width, pw > 0, est.width > pw { scale = min(scale, pw / est.width) }
+            if let ph = proposedSize.height, ph > 0, est.height > ph { scale = min(scale, ph / est.height) }
+            scale = max(scale, wasmMinScaleFactor)
+            if scale < 1 {
+                return CGSize(width: est.width * scale, height: est.height * scale)
+            }
+        }
+        return est
     }
     // Disambiguate ContentResponder.contains (ShapeStyledLeafView vs RendererLeafView both
     // vend a default); text isn't interactive here, so report no hit.
@@ -286,6 +313,11 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
     // When set, `shape(in:)` emits real `.image` DisplayList content instead of `.text`; nil (the
     // default) leaves all existing text/symbol-glyph rendering completely unaffected.
     package var wasmBitmapImage: GraphicsImage? = nil
+    // [wandr] `.minimumScaleFactor` (env). 1 = don't shrink. When < 1 the renderer clamps the drawn
+    // font DOWN to fit the laid-out frame (bounded below by wasmMinScaleFactor × wasmFontSize), so a
+    // large fixed font (e.g. a card's `.font(.system(size: 200))` emoji) fits its box instead of
+    // overflowing. Proper width-negotiated auto-shrink is a TODO; this covers the common fit-to-box.
+    package var wasmMinScaleFactor: CGFloat = 1
 
     package init(
         text: ResolvedStyledText,
@@ -296,7 +328,8 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         wasmColor: Color.Resolved? = nil,
         wasmFontFamily: String = "",
         wasmSymbolFill: Bool = false,
-        wasmBitmapImage: GraphicsImage? = nil
+        wasmBitmapImage: GraphicsImage? = nil,
+        wasmMinScaleFactor: CGFloat = 1
     ) {
         self.text = text
         self.renderer = renderer
@@ -307,6 +340,7 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
         self.wasmFontFamily = wasmFontFamily
         self.wasmSymbolFill = wasmSymbolFill
         self.wasmBitmapImage = wasmBitmapImage
+        self.wasmMinScaleFactor = wasmMinScaleFactor
     }
 
     package static var animatesSize: Bool {
@@ -1177,7 +1211,8 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
             needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false,
             wasmPlainString: wasmPlainString,
             wasmFontSize: wasmFontSize,
-            wasmColor: wasmColor
+            wasmColor: wasmColor,
+            wasmMinScaleFactor: env.minimumScaleFactor
         )
         return accessibilityView.body
     }
